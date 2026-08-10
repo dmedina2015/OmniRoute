@@ -19,7 +19,7 @@ export type ProviderListingModel = {
 
 export type MergeProviderModelListingInput = {
   providerId: string;
-  registryModels: Array<{ id: string; name?: string; [key: string]: unknown }>;
+  registryModels: Array<{ id: string; name?: string }>;
   syncedModels: Array<{ id: string; name?: string; [key: string]: unknown }>;
   customModels: Array<{ id: string; name?: string; source?: string; [key: string]: unknown }>;
   usesCuratedModelsOnly?: boolean;

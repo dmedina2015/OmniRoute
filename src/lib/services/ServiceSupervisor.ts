@@ -46,6 +46,7 @@ export class ServiceSupervisor extends EventEmitter {
   private lastError: string | null = null;
   private childProcess: ChildProcess | null = null;
   private adopted: boolean = false;
+  private spawnFailed: boolean = false;
   private readonly buffer: RingBuffer;
   private readonly checker: HealthChecker;
   private operationLock: Promise<void> = Promise.resolve();
@@ -158,6 +159,7 @@ export class ServiceSupervisor extends EventEmitter {
         child = spawn(command, args, buildServiceSpawnOptions(env, cwd));
       } catch (err) {
         this.checker.stop();
+        this.spawnFailed = true;
         const msg = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
         this.lastError = msg;
         this.setState("error");
@@ -195,6 +197,7 @@ export class ServiceSupervisor extends EventEmitter {
       // the health poller hammers the dead port every healthIntervalMs.
       child.once("error", (err) => {
         this.checker.stop();
+        this.spawnFailed = true;
         const msg = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
         this.lastError = msg;
         this.setState("error");
@@ -205,6 +208,12 @@ export class ServiceSupervisor extends EventEmitter {
       this.checker.start();
 
       await this.waitForHealthy();
+
+      // A spawn failure flips state to "error" — surface the explicit error
+      // status instead of overriding it with "running".
+      if (this.state === "error") {
+        return this.getStatus();
+      }
 
       this.setState("running");
       await setToolStatus(this.config.tool, "running", this.pid ?? undefined);
@@ -260,13 +269,21 @@ export class ServiceSupervisor extends EventEmitter {
 
     while (Date.now() < deadline) {
       if (this.checker.getHealth() === "healthy") return;
-      if (this.state === "error") throw new Error(this.lastError ?? "Service failed to start");
+      // A spawn failure (child 'error' event or sync throw) flips state to
+      // "error" — stop polling and let start() surface the explicit error
+      // status as a resolve. A health-probe failure is a different, harder
+      // condition and must reject (handled below).
+      if (this.state === "error") {
+        if (this.spawnFailed) return;
+        throw new Error(this.lastError ?? "Service failed to start");
+      }
       await new Promise((r) => setTimeout(r, 1_000));
     }
     // Timeout reached without a healthy probe. The health poller may have
     // flipped the state to "error" while we were waiting (FAILURE_THRESHOLD
     // consecutive failures) — surface that instead of a degraded marker.
     if (this.state === "error") {
+      if (this.spawnFailed) return;
       throw new Error(this.lastError ?? "Service failed to start");
     }
     this.lastError = sanitizeErrorMessage(

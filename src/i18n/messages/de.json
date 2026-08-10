@@ -4744,7 +4744,26 @@
       "configure": "Anbieter konfigurieren"
     },
     "tierFlowDiagramAlt": "OmniRoute 3-Stufen-Fallback-Diagramm",
-    "apiKeyMgmt": "API-Schlüsselverwaltung"
+    "apiKeyMgmt": "API-Schlüsselverwaltung",
+    "freeProviders": {
+      "title": "__MISSING__:Set up free providers",
+      "description": "__MISSING__:Optionally enable selected no-signup providers. Review each provider's notice and site before continuing; availability and rate limits are controlled by third parties.",
+      "loading": "__MISSING__:Loading free providers...",
+      "loadFailed": "__MISSING__:Could not load free providers.",
+      "alreadyConfigured": "__MISSING__:All eligible free providers are already configured.",
+      "reviewProviderSite": "__MISSING__:Review provider site and terms",
+      "confirmation": "__MISSING__:I reviewed these third-party providers and want OmniRoute to create the selected connections.",
+      "setupSelected": "__MISSING__:Set up selected providers",
+      "settingUp": "__MISSING__:Setting up...",
+      "setupFailed": "__MISSING__:Could not set up the selected providers. Nothing existing was changed.",
+      "retryFailed": "__MISSING__:Retry failed providers",
+      "orUseApiKey": "__MISSING__:or connect with an API key",
+      "result": {
+        "created": "__MISSING__:created",
+        "skipped": "__MISSING__:already configured",
+        "failed": "__MISSING__:failed"
+      }
+    }
   },
   "providers": {
     "title": "Anbieter",

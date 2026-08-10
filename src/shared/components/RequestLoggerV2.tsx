@@ -95,6 +95,7 @@ const RequestLoggerV2 = forwardRef<RequestLoggerV2Handle, { initialSelectedId?: 
   (props, ref) => {
     const { initialSelectedId } = props as any;
     const t = useTranslations("requestLogger");
+    const tCache = useTranslations("cache");
     const { emailsVisible } = useEmailPrivacyStore();
 
     // Get translated status filters
@@ -1514,6 +1515,30 @@ const RequestLoggerV2 = forwardRef<RequestLoggerV2Handle, { initialSelectedId?: 
                                 <span className="text-emerald-700 dark:text-emerald-400">
                                   {log.tokens?.out?.toLocaleString() || 0}
                                 </span>
+                                {log.tokens?.cacheRead != null && log.tokens.cacheRead > 0 && (
+                                  <>
+                                    <span className="mx-1 text-border">|</span>
+                                    <span className="text-text-muted">CR:</span>{" "}
+                                    <span
+                                      className="text-sky-700 dark:text-sky-400"
+                                      title={tCache("cachedTokensCol")}
+                                    >
+                                      {log.tokens.cacheRead.toLocaleString()}
+                                    </span>
+                                  </>
+                                )}
+                                {log.tokens?.cacheWrite != null && log.tokens.cacheWrite > 0 && (
+                                  <>
+                                    <span className="mx-1 text-border">|</span>
+                                    <span className="text-text-muted">CW:</span>{" "}
+                                    <span
+                                      className="text-amber-700 dark:text-amber-400"
+                                      title={tCache("cacheCreation")}
+                                    >
+                                      {log.tokens.cacheWrite.toLocaleString()}
+                                    </span>
+                                  </>
+                                )}
                                 {log.tokens?.compressed != null && log.tokens.compressed > 0 && (
                                   <>
                                     <span className="mx-1 text-border">|</span>

@@ -330,3 +330,15 @@ export const STREAM_RECOVERY = {
   BUFFER_MAX_BYTES: 65536,
   EARLY_RETRY_MAX: 4,
 } as const;
+
+/**
+ * Active-stream quality watchdog defaults (#9709). This is separate from the
+ * idle timeout (no chunks) and the absolute upstream-attempt deadline: it only
+ * evaluates useful assistant output after warm-up plus one complete window.
+ */
+export const STREAM_THROUGHPUT_WATCHDOG = {
+  WARMUP_MS: 30_000,
+  WINDOW_MS: 30_000,
+  MIN_USEFUL_BYTES_PER_SECOND: 4,
+  MIN_USEFUL_BYTES: 1,
+} as const;

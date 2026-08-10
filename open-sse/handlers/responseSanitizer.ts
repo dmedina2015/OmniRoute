@@ -576,15 +576,21 @@ function sanitizeResponsesUsage(usage: unknown): unknown {
 
 /**
  * Normalize response ID to use chatcmpl- prefix.
+ * Preserves numeric/short custom ids as their string form rather than
+ * regenerating them — a passthrough numeric id (e.g. `123`) must stay `"123"`
+ * so streaming clients can correlate chunks (#3427/#5776). Only a genuinely
+ * missing/empty id gets a fresh `chatcmpl-` token.
  */
 function normalizeResponseId(id: unknown): string {
-  if (!id || typeof id !== "string") {
+  if (!id || (typeof id !== "string" && typeof id !== "number")) {
     return `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 29)}`;
   }
-  // Already correct format
-  if (id.startsWith("chatcmpl-")) return id;
-  // Keep custom IDs but don't break them
-  return id;
+  const str = String(id);
+  if (str === "") {
+    return `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 29)}`;
+  }
+  // Already correct format, or a custom/numeric id — keep it.
+  return str;
 }
 
 function normalizeResponsesId(id: unknown): string {

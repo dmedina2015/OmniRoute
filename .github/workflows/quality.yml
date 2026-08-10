@@ -194,6 +194,25 @@ jobs:
           "$HOME/.local/bin/osv-scanner" --version || true
           "$HOME/.local/bin/oasdiff" --version || true
           zizmor --version || true
+      - name: Forgotten sibling tests (advisory)
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          node scripts/quality/build-test-impact-map.mjs
+          node scripts/check/check-forgotten-sibling-tests.mjs \
+            --summary-file forgotten-sibling-tests.md \
+            --json-file forgotten-sibling-tests.json
+          cat forgotten-sibling-tests.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload forgotten sibling report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: forgotten-sibling-tests
+          path: |
+            forgotten-sibling-tests.md
+            forgotten-sibling-tests.json
+          if-no-files-found: ignore
+          retention-days: 30
       # Quality gates (all, non-fail-fast) — #8542: replaces 17 bare check:* steps,
       # 6 G0 gates, 4 ratchet gates, and 3 typecheck steps with a single aggregation
       # step. Each gate runs in a loop with ::group::; failures are collected and
@@ -279,7 +298,8 @@ jobs:
           GITHUB_BASE_REF: ${{ github.base_ref }}
         run: |
           git fetch --no-tags origin "$GITHUB_BASE_REF" || true
-          node scripts/quality/build-test-impact-map.mjs
+          # The advisory sibling-test step generates the same map earlier in this job.
+          [ -f config/quality/test-impact-map.json ] || node scripts/quality/build-test-impact-map.mjs
           SEL="$(node scripts/quality/select-impacted-tests.mjs)"
           # Shadow evidence (#8084): persist every selection so TIA false negatives can
           # be measured against fast-unit's full-suite verdict across releases BEFORE

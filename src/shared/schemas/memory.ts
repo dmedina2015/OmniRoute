@@ -1,5 +1,34 @@
 import { z } from "zod";
 import { MemoryType } from "@/lib/memory/types";
+
+const optionalCustomEmbeddingValue = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? null : value),
+  z.string().trim().max(2048).nullable().optional()
+);
+
+const optionalCustomEmbeddingUrl = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? null : value),
+  z
+    .string()
+    .trim()
+    .max(2048)
+    .refine((value) => {
+      try {
+        const url = new URL(value);
+        return (
+          (url.protocol === "http:" || url.protocol === "https:") &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      } catch {
+        return false;
+      }
+    }, "Custom embedding endpoint must be an HTTP(S) URL without credentials or query data")
+    .nullable()
+    .optional()
+);
 /** Schema estendido para PUT /api/settings/memory (D9). */
 export const MemorySettingsExtendedSchema = z
   .object({
@@ -12,6 +41,8 @@ export const MemorySettingsExtendedSchema = z
     // Campos novos (D9)
     embeddingSource: z.enum(["remote", "static", "transformers", "auto"]).optional(),
     embeddingProviderModel: z.string().nullable().optional(), // formato `provider/model`
+    customBaseUrl: optionalCustomEmbeddingUrl,
+    customModelId: optionalCustomEmbeddingValue,
     transformersEnabled: z.boolean().optional(),
     staticEnabled: z.boolean().optional(),
     rerankEnabled: z.boolean().optional(),

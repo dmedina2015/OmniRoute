@@ -4142,6 +4142,12 @@
       "providerModelLabel": "Provider / Modelo",
       "noRemoteProviders": "Nenhum provider com chave configurada",
       "selectProviderModel": "Selecione um modelo",
+      "customBaseUrlLabel": "URL base personalizada (opcional)",
+      "customModelIdLabel": "ID do modelo personalizado (opcional)",
+      "customEndpointHelp": "Use um endpoint /embeddings compatível com OpenAI. Endpoints locais são permitidos; alvos de metadados de nuvem são bloqueados.",
+      "customEndpointSave": "Aplicar endpoint personalizado",
+      "customEndpointInvalid": "Informe uma URL base HTTP(S) válida e um ID de modelo, ou deixe os dois campos vazios.",
+      "customEndpointSaveFailed": "Não foi possível salvar o endpoint de embedding personalizado.",
       "staticEnabledLabel": "Habilitar Static Potion",
       "staticEnabledDesc": "Baixa e usa o modelo potion-base-8M localmente",
       "transformersEnabledLabel": "Habilitar Transformers.js",
@@ -4744,7 +4750,26 @@
       "configure": "Configurar provedores"
     },
     "tierFlowDiagramAlt": "Diagrama de fallback de 3 camadas do OmniRoute",
-    "apiKeyMgmt": "Ger. de Chaves API"
+    "apiKeyMgmt": "Ger. de Chaves API",
+    "freeProviders": {
+      "title": "Configurar provedores gratuitos",
+      "description": "Opcionalmente, ative provedores selecionados que não exigem cadastro. Revise o aviso e o site de cada provedor antes de continuar; disponibilidade e limites são controlados por terceiros.",
+      "loading": "Carregando provedores gratuitos...",
+      "loadFailed": "Não foi possível carregar os provedores gratuitos.",
+      "alreadyConfigured": "Todos os provedores gratuitos elegíveis já estão configurados.",
+      "reviewProviderSite": "Revisar site e termos do provedor",
+      "confirmation": "Revisei estes provedores de terceiros e quero que o OmniRoute crie as conexões selecionadas.",
+      "setupSelected": "Configurar provedores selecionados",
+      "settingUp": "Configurando...",
+      "setupFailed": "Não foi possível configurar os provedores selecionados. Nenhuma conexão existente foi alterada.",
+      "retryFailed": "Tentar novamente os provedores com falha",
+      "orUseApiKey": "ou conectar com uma chave de API",
+      "result": {
+        "created": "criado",
+        "skipped": "já configurado",
+        "failed": "falhou"
+      }
+    }
   },
   "providers": {
     "title": "Provedores",

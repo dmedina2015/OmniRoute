@@ -89,7 +89,7 @@ export async function handleFalAIImageEdit({
     const payload = await response.json();
     const normalizedBody =
       body.response_format === undefined ? { ...body, response_format: "b64_json" } : body;
-    const imagesOut = await normalizeProviderImagePayload(payload, normalizedBody, log);
+    const imagesOut = await normalizeProviderImagePayload(payload, normalizedBody, log, "b64_json");
     return saveImageSuccessResult({
       provider,
       model: editModel,

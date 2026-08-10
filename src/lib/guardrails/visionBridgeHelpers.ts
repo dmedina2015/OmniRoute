@@ -222,7 +222,7 @@ const VISION_BRIDGE_UA_FETCH: typeof fetch = ((input: RequestInfo | URL, init?: 
       "user-agent": "omniroute-vision-bridge",
       ...((init?.headers as Record<string, string> | undefined) ?? {}),
     },
-  })) as typeof fetch;
+  })) as unknown as typeof fetch;
 
 /**
  * Resolve every image part in the body to a base64 data URI when the target

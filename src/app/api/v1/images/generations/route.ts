@@ -307,7 +307,9 @@ async function postHandler(request, context) {
     });
   }
 
-  const errorPayload = toJsonErrorPayload((result as any).error, "Image generation provider error");
+  const errorPayload = toJsonErrorPayload((result as any).error, "Image generation provider error") as {
+    error?: { message?: string };
+  };
   const message =
     typeof errorPayload?.error?.message === "string"
       ? errorPayload.error.message

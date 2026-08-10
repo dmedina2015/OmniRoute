@@ -90,7 +90,10 @@ function absoluteFalUrl(value: unknown, baseUrl: string): string | undefined {
 
 function normalizeFalVideoResponse(payload: unknown) {
   const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const video = record.video && typeof record.video === "object" ? record.video : null;
+  const video =
+    record.video && typeof record.video === "object"
+      ? (record.video as Record<string, unknown>)
+      : null;
   const url = video && typeof video.url === "string" ? video.url.trim() : "";
 
   if (!url) {

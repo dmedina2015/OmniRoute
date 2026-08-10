@@ -11,6 +11,13 @@
  * without real sockets. The ReadableStream wiring lives in `createRecoverableStream`.
  */
 import { STREAM_RECOVERY } from "../config/constants.ts";
+import {
+  createThroughputWatchdog,
+  ThroughputWatchdogError,
+  type ThroughputWatchdogOptions,
+} from "./throughputWatchdog.ts";
+
+export { ThroughputWatchdogError } from "./throughputWatchdog.ts";
 
 /** Raised internally when an upstream stream ends without a terminal SSE marker. */
 export class TruncatedStreamError extends Error {
@@ -123,7 +130,9 @@ const RETRYABLE_ERROR_NAMES = new Set(["TimeoutError", "BodyTimeoutError"]);
  * the executor retry/failover loop, not here.
  */
 export function isRetryableStreamError(error: unknown): boolean {
-  if (error instanceof TruncatedStreamError) return true;
+  if (error instanceof TruncatedStreamError || error instanceof ThroughputWatchdogError) {
+    return true;
+  }
   if (!error || typeof error !== "object") return false;
 
   const name = (error as { name?: unknown }).name;
@@ -289,6 +298,10 @@ export interface RecoverableStreamOptions {
   maxContinuations?: number;
   /** Observability hook fired on each continuation attempt. */
   onContinue?: (attempt: number, assistantSoFar: string) => void;
+  /** Opt-in active-stream output-quality watchdog. Disabled when omitted. */
+  throughputWatchdog?: ThroughputWatchdogOptions;
+  /** Sanitized observability hook fired before the active attempt is aborted. */
+  onWatchdogAbort?: (error: ThroughputWatchdogError) => void;
 }
 
 /**
@@ -312,6 +325,7 @@ export function createRecoverableStream(
   let retries = 0;
   let finalized = false;
   let cancelled = false;
+  let throughputWatchdog = createThroughputWatchdog(options.throughputWatchdog);
 
   const runFinalize = () => {
     if (finalized) return;
@@ -342,6 +356,7 @@ export function createRecoverableStream(
     if (!next) return false;
     reader = next.getReader();
     holdback.discard(); // reuse the (still-uncommitted) buffer for the new attempt
+    throughputWatchdog = createThroughputWatchdog(options.throughputWatchdog);
     return true;
   };
 
@@ -518,6 +533,32 @@ export function createRecoverableStream(
         }
 
         if (value === undefined) continue;
+
+        const watchdogDecision = throughputWatchdog.observe(value);
+        if (watchdogDecision.abort) {
+          const error = new ThroughputWatchdogError();
+          options.onWatchdogAbort?.(error);
+          if (!holdback.committed && (await tryReopen(error))) continue;
+          if (holdback.committed) {
+            try {
+              await reader.cancel(error);
+            } catch {
+              // The active attempt may have closed while the watchdog was deciding.
+            }
+            if (await tryContinue(controller)) {
+              runFinalize();
+              controller.close();
+              return;
+            }
+            runFinalize();
+            controller.error(error);
+            return;
+          }
+          flushHeld(controller);
+          runFinalize();
+          controller.close();
+          return;
+        }
 
         if (holdback.committed) {
           emit(controller, value);

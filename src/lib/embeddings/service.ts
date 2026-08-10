@@ -50,6 +50,8 @@ export interface EmbeddingHandlerOptions {
   apiKeyId?: string | null;
   apiKeyName?: string | null;
   connectionId?: string | null;
+  resolvedProvider?: EmbeddingProvider | null;
+  resolvedModel?: string | null;
 }
 
 export async function createEmbeddingResponse(
@@ -151,7 +153,13 @@ export async function createEmbeddingResponse(
     log.error("EMBED", `Failed to load provider_nodes for embeddings: ${err}`);
   }
 
-  const { provider, model: resolvedModel } = parseEmbeddingModel(body.model, dynamicProviders);
+  const parsedModel = options.resolvedProvider
+    ? {
+        provider: options.resolvedProvider.id,
+        model: options.resolvedModel ?? body.model,
+      }
+    : parseEmbeddingModel(body.model, dynamicProviders);
+  const { provider, model: resolvedModel } = parsedModel;
   if (!provider) {
     return errorResponse(
       HTTP_STATUS.BAD_REQUEST,
@@ -160,7 +168,10 @@ export async function createEmbeddingResponse(
   }
 
   let providerConfig: EmbeddingProvider | null =
-    dynamicProviders.find((dp) => dp.id === provider) || getEmbeddingProvider(provider) || null;
+    options.resolvedProvider ||
+    dynamicProviders.find((dp) => dp.id === provider) ||
+    getEmbeddingProvider(provider) ||
+    null;
   let credentialsProviderId = provider;
 
   if (!providerConfig) {

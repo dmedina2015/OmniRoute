@@ -182,6 +182,16 @@ export async function createBuiltinAutoCombo(modelStr: string, suffix: string) {
     return virtualCombo;
   }
 
+  // Advertised `auto/*` ids whose template maps to no variant (auto/chat,
+  // auto/best-chat, auto/pro-chat) still materialize via the default
+  // (unconstrained) virtual combo rather than throwing "Unknown built-in".
+  if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, modelStr)) {
+    const virtualCombo = await createVirtualAutoCombo(undefined);
+    virtualCombo.name = modelStr;
+    virtualCombo.id = modelStr;
+    return virtualCombo;
+  }
+
   // #4235 Phase B: `auto/<category>[:<tier>]` (e.g. auto/coding:fast, auto/vision).
   const parsed = parseAutoSuffix(suffix);
   if (parsed.valid) {

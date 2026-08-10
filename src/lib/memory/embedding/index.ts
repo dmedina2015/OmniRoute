@@ -17,6 +17,7 @@ import { embedRemote } from "./remote";
 import { embedStatic } from "./staticPotion";
 import { embedTransformers } from "./transformersLocal";
 import { buildCacheKey, get as cacheGet, set as cacheSet } from "./cache";
+import { resolveMemoryCustomEmbeddingProvider } from "./customProvider";
 
 const STATIC_MODEL = process.env.MEMORY_STATIC_MODEL || "minishlab/potion-base-8M";
 const TRANSFORMERS_MODEL = process.env.MEMORY_TRANSFORMERS_MODEL || "Xenova/all-MiniLM-L6-v2";
@@ -66,12 +67,33 @@ function remoteResolution(model: string, reasonPrefix: string): EmbeddingResolut
   };
 }
 
+function customRemoteResolution(settings: MemorySettingsExtended): EmbeddingResolution | null {
+  const customBaseUrl = settings.customBaseUrl?.trim() ?? "";
+  const customModelId = settings.customModelId?.trim() ?? "";
+  if (!customBaseUrl && !customModelId) return null;
+  if (!customBaseUrl || !customModelId) return noSource("custom embedding endpoint is incomplete");
+  const identity = `${customBaseUrl.replace(/\/+$/, "")}|${customModelId}`;
+  return {
+    source: "remote",
+    model: `memory-custom/${customModelId}`,
+    dimensions: null,
+    identity,
+    signature: makeSignature("remote", identity, null),
+    reason: "custom remote provider configured (dim=unknown, will probe at embed time)",
+  };
+}
+
 /**
  * Resolve which embedding source is active for the given settings (D4).
  * Pure: no heavy I/O. Provider key check done via synchronous registry lookup.
  */
 export function resolveEmbeddingSource(settings: MemorySettingsExtended): EmbeddingResolution {
   const source = settings.embeddingSource ?? "auto";
+
+  const customResolution = customRemoteResolution(settings);
+  if (customResolution && (source === "remote" || source === "auto")) {
+    return customResolution;
+  }
 
   if (source === "remote") {
     // Explicit remote — check if the configured model has a key
@@ -194,7 +216,12 @@ export async function embed(
     };
   }
 
-  const cacheKey = buildCacheKey(resolution.source, resolution.model, resolution.dimensions, text);
+  const cacheKey = buildCacheKey(
+    resolution.source,
+    resolution.identity ?? resolution.model,
+    resolution.dimensions,
+    text
+  );
 
   const cached = cacheGet(cacheKey);
   if (cached) {
@@ -211,7 +238,21 @@ export async function embed(
   let result: EmbeddingResult | EmbeddingError;
 
   if (resolution.source === "remote") {
-    result = await embedRemote(text, resolution.model ?? "");
+    let customProvider;
+    try {
+      customProvider = resolveMemoryCustomEmbeddingProvider(settings);
+    } catch (error: unknown) {
+      return {
+        source: "remote",
+        model: resolution.model,
+        reason: "request_failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Custom embedding endpoint is invalid or blocked",
+      };
+    }
+    result = await embedRemote(text, resolution.model ?? "", customProvider);
   } else if (resolution.source === "static") {
     result = await embedStatic(text);
   } else {

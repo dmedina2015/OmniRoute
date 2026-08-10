@@ -161,13 +161,15 @@ The `memory_vec_meta` table (migration `073_memory_vec.sql`) stores:
 
 ## Settings extension
 
-Seven new fields were added to `MemorySettingsExtended` (plan 21, D9) in
+Nine embedding and vector fields are available in `MemorySettingsExtended` in
 `src/shared/schemas/memory.ts`, persisted via `src/lib/db/settings.ts`:
 
 | Field                    | Type                                               | Default  | Description                                      |
 | ------------------------ | -------------------------------------------------- | -------- | ------------------------------------------------ |
 | `embeddingSource`        | `"remote" \| "static" \| "transformers" \| "auto"` | `"auto"` | Which embedding source to use                    |
 | `embeddingProviderModel` | `string \| null`                                   | `null`   | Provider/model in `provider/model` format        |
+| `customBaseUrl`          | `string \| null`                                   | `null`   | Memory-only OpenAI-compatible endpoint base URL  |
+| `customModelId`          | `string \| null`                                   | `null`   | Model ID sent to the custom endpoint             |
 | `transformersEnabled`    | `boolean`                                          | `false`  | Opt-in for Transformers.js (MiniLM, ~400MB)      |
 | `staticEnabled`          | `boolean`                                          | `false`  | Opt-in for static potion-base-8M local model     |
 | `rerankEnabled`          | `boolean`                                          | `false`  | Enable reranking step (adds +200-500ms/req)      |
@@ -175,6 +177,14 @@ Seven new fields were added to `MemorySettingsExtended` (plan 21, D9) in
 | `vectorStore`            | `"sqlite-vec" \| "qdrant" \| "auto"`               | `"auto"` | Which vector backend to use                      |
 
 These are exposed via `GET /PUT /api/settings/memory` (schema `MemorySettingsExtendedSchema`).
+
+For the `remote` source, Memory also accepts the optional `customBaseUrl` and
+`customModelId` settings. Together they select an OpenAI-compatible `/embeddings`
+endpoint and model without changing the global embedding registry. The endpoint is
+normalized before use and checked by the provider outbound URL policy: HTTP(S) is
+required, embedded credentials and query strings are rejected, and cloud-metadata
+addresses remain blocked. Empty values preserve the selected registry provider. Errors
+returned to the dashboard are sanitized and endpoint credentials are never logged.
 
 > **TODO (D20):** Scope `global` (sharing memories across all API keys) is not
 > implemented in this release. It requires schema changes and a global retrieval

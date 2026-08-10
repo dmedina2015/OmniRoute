@@ -1096,9 +1096,12 @@ async function patchedFetch(
         continue;
       }
       tagProxyUnreachable(error);
+      const originalMsg = error instanceof Error ? error.message : String(error);
       const sanitized = sanitizeTransportError(
         error,
-        "Proxy request failed",
+        originalMsg
+          ? `Proxy request failed: ${originalMsg}`
+          : "Proxy request failed",
         "PROXY_REQUEST_FAILED"
       );
       console.error(

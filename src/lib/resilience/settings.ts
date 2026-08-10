@@ -1,4 +1,8 @@
-import { DEFAULT_API_LIMITS, PROVIDER_PROFILES } from "@omniroute/open-sse/config/constants";
+import {
+  DEFAULT_API_LIMITS,
+  PROVIDER_PROFILES,
+  STREAM_THROUGHPUT_WATCHDOG,
+} from "@omniroute/open-sse/config/constants";
 
 import type { JsonRecord, ResilienceSettings, ResilienceSettingsPatch } from "./settings/types";
 import {
@@ -30,6 +34,7 @@ export type {
   ProviderCooldownSettings,
   QuotaPreflightSettings,
   StreamRecoverySettings,
+  StreamThroughputWatchdogSettings,
   ProviderQuotaOverrideSettings,
   ResilienceSettings,
   ResilienceSettingsPatch,
@@ -150,6 +155,15 @@ export const DEFAULT_RESILIENCE_SETTINGS: ResilienceSettings = {
     continueMidStream: ["true", "1", "on"].includes(
       (process.env.STREAM_RECOVERY_MIDSTREAM_ENABLED || "").trim().toLowerCase()
     ),
+    throughputWatchdog: {
+      enabled: ["true", "1", "on"].includes(
+        (process.env.STREAM_THROUGHPUT_WATCHDOG_ENABLED || "").trim().toLowerCase()
+      ),
+      warmupMs: STREAM_THROUGHPUT_WATCHDOG.WARMUP_MS,
+      windowMs: STREAM_THROUGHPUT_WATCHDOG.WINDOW_MS,
+      minUsefulBytesPerSecond: STREAM_THROUGHPUT_WATCHDOG.MIN_USEFUL_BYTES_PER_SECOND,
+      minUsefulBytes: STREAM_THROUGHPUT_WATCHDOG.MIN_USEFUL_BYTES,
+    },
   },
   // #6846 Phase 1: empty by default — nvidia (and any future header-less
   // provider registered in providerDefaultRateLimit.ts) uses its static

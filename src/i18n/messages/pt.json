@@ -4744,7 +4744,26 @@
       "configure": "Configurar provedores"
     },
     "tierFlowDiagramAlt": "Diagrama de fallback de 3 camadas do OmniRoute",
-    "apiKeyMgmt": "Gerenciamento de chave de API"
+    "apiKeyMgmt": "Gerenciamento de chave de API",
+    "freeProviders": {
+      "title": "Configurar fornecedores gratuitos",
+      "description": "Opcionalmente, ative fornecedores selecionados que não exigem registo. Reveja o aviso e o site de cada fornecedor antes de continuar; a disponibilidade e os limites são controlados por terceiros.",
+      "loading": "A carregar fornecedores gratuitos...",
+      "loadFailed": "Não foi possível carregar os fornecedores gratuitos.",
+      "alreadyConfigured": "Todos os fornecedores gratuitos elegíveis já estão configurados.",
+      "reviewProviderSite": "Rever site e termos do fornecedor",
+      "confirmation": "Revi estes fornecedores de terceiros e quero que o OmniRoute crie as ligações selecionadas.",
+      "setupSelected": "Configurar fornecedores selecionados",
+      "settingUp": "A configurar...",
+      "setupFailed": "Não foi possível configurar os fornecedores selecionados. Nenhuma ligação existente foi alterada.",
+      "retryFailed": "Tentar novamente os fornecedores com falha",
+      "orUseApiKey": "ou ligar com uma chave de API",
+      "result": {
+        "created": "criado",
+        "skipped": "já configurado",
+        "failed": "falhou"
+      }
+    }
   },
   "providers": {
     "title": "Provedores",

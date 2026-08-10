@@ -1640,7 +1640,8 @@ export function createSSEStream(options: StreamOptions = {}) {
                       (parsed.choices.length === 1 &&
                         parsed.choices[0]?.delta &&
                         typeof parsed.choices[0].delta === "object" &&
-                        Object.keys(parsed.choices[0].delta).length === 0))
+                        Object.keys(parsed.choices[0].delta).length === 0 &&
+                        !parsed.choices[0]?.finish_reason))
                   ) {
                     const emptyChoicesUsage = extractUsage(parsed) ?? parsed.usage;
                     if (hasValidUsage(emptyChoicesUsage)) {
@@ -1849,6 +1850,7 @@ export function createSSEStream(options: StreamOptions = {}) {
                   if (isFinishChunk) {
                     passthroughSawFinishReason = true;
                   }
+
 
                   if (isFinishChunk && passthroughHasToolCalls) {
                     toolFinishTime = now;

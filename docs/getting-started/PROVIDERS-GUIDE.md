@@ -30,6 +30,18 @@ See **[WEB-COOKIE-GUIDE.md](./WEB-COOKIE-GUIDE.md)** for general setup instructi
 
 ## Quick Start: Connect Your First Provider
 
+### Optional first-run free-provider setup
+
+The first-run wizard offers an explicit **Set up free providers** card. It derives the current
+eligible list from OmniRoute's no-auth provider registry, then lets you review and deselect each
+provider before confirming. OmniRoute shows the provider's caution notice and a link to its site
+so you can review third-party terms, privacy, availability, and rate limits first.
+
+This action is optional: finishing the wizard never creates free-provider connections silently.
+It creates only providers that are still missing, leaves existing customized connections
+untouched, and reports created, already-configured, and failed providers individually. You can
+safely retry only the failures after a partial result.
+
 ### Option A: Free Provider (No Credit Card)
 
 1. Open the dashboard at `http://localhost:20128`

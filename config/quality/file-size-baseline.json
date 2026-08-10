@@ -420,8 +420,10 @@
     "open-sse/executors/default.ts": 1355,
     "open-sse/executors/kiro.ts": 1390,
     "open-sse/translator/request/openai-to-kiro.ts": 1374,
-    "open-sse/utils/sseHeartbeat.ts": 194
+    "open-sse/utils/sseHeartbeat.ts": 194,
+    "open-sse/utils/proxyFetch.ts": 1207
   },
+  "_rebaseline_base_2026_08_10_proxyfetch": "Base-red fix (green-prs sweep, issue #9985): open-sse/utils/proxyFetch.ts 1207 > cap 1000 — new proxied-TLS fetch helper introduced by the Fal reference-image work. Owner-authorized quick rebaseline to green; structural slim tracked for v3.9.0.",
   "_rebaseline_2026_07_27_v3849_train2": "Merge-train 2 (7 PRs) \u2014 owner-approved 2026-07-27. Single entry: chatCore.ts 4955->5006 (#8595, Responses multi-turn image compaction before the context hard-reject). Genuine irreducible growth at the existing compaction chokepoint in handleChatCore \u2014 the PR adds a last-resort retry against the concrete budget plus the estimateFinalInputTokens helper, both wired at the pre-existing call site rather than a new branch. Covered by tests/unit/8560-responses-image-compaction.test.ts (4 tests).",
   "_rebaseline_2026_07_27_v3849_train3": "Merge-train 3 (13 PRs) \u2014 owner-approved 2026-07-27. Both entries are genuine irreducible growth at existing chokepoints, not new branches: src/lib/db/apiKeys.ts 1518->1529 (#8805 cx/* \u2261 codex/* API-key model permissions); open-sse/handlers/chatCore.ts 5006->5020 (#8806 real response payload into plugin onResponse hooks). Covered by tests/unit/db-apiKeys-crud.test.ts (4 new cases) and the two plugin-hook test files updated in #8806 respectively.",
   "_rebaseline_2026_07_28_8842_antigravity_projectid_refresh": "PR #8842 (fix/antigravity-projectid-refresh) own growth: open-sse/executors/antigravity.ts 1493->1528 (+35 = projectId discovery in refreshCredentials: import ensureAntigravityProjectAssigned + trim projectId + call ensureAntigravityProjectAssigned with 8s timeout + persistDiscoveredAntigravityProjectId + log success/failure). Irreducible wiring at the existing credential-refresh chokepoint. Covered by tests/unit/executor-antigravity.test.ts (4 new test cases).",

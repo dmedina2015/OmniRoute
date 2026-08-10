@@ -523,6 +523,19 @@ export function translateNonStreamingResponse(
         }
       }
 
+      // #9971: a content-less-but-valid Claude body (thinking / redacted_thinking
+      // / tool_use-only, or a truncated extended-thinking-only stream) has blocks
+      // but no final text. Surfacing it here helps correlate a live VPS capture
+      // with detectMalformedNonStream's clause; the content itself is valid output
+      // (see detectMalformedNonStream), so this is observation, not a decision.
+      if (textContent.length === 0 && process.env.DEBUG_CLAUDE_NONSTREAM === "true") {
+        console.log(
+          `[ClaudeNonStream] ${contentBlocks.length} content block(s), empty textContent ` +
+            `(thinking=${thinkingContent.length}, toolCalls=${toolCalls.length}); ` +
+            `content-less-but-valid body preserved (not empty_choices)`
+        );
+      }
+
       const message: JsonRecord = { role: "assistant" };
       if (textContent) {
         message.content = textContent;

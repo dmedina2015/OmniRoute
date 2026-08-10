@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useDisplayBaseUrl } from "@/shared/hooks";
+import { FreeProviderOnboardingCard } from "./steps/FreeProviderOnboardingCard";
 import { TierTour } from "./steps/TierTour";
 
 const STEP_IDS = ["welcome", "tiers", "security", "provider", "test", "done"];
@@ -357,6 +358,12 @@ export default function OnboardingWizard() {
             {currentStep.id === "provider" && (
               <div className="space-y-4">
                 <p className="text-sm text-text-muted text-center">{t("providerDesc")}</p>
+                <FreeProviderOnboardingCard />
+                <div className="flex items-center gap-3 text-[11px] text-text-muted">
+                  <span className="h-px flex-1 bg-white/10" />
+                  <span>{t("freeProviders.orUseApiKey")}</span>
+                  <span className="h-px flex-1 bg-white/10" />
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   {COMMON_PROVIDERS.map((p) => (
                     <button
