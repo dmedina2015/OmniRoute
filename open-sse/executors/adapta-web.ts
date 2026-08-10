@@ -6,21 +6,36 @@ const ADAPTA_APP_URL = "https://agent.adapta.one";
 const ADAPTA_CLERK_URL = "https://clerk.agent.adapta.one";
 const ADAPTA_STREAM_URL = `${ADAPTA_APP_URL}/api/chat/stream/v1`;
 
-// Default model ID in Adapta's internal system (corresponds to "ONE" / auto-select)
-const DEFAULT_AI_MODEL_ID = 14;
-
-// Map from OmniRoute model IDs to Adapta internal model IDs.
-// 14 = "ONE" (auto), values confirmed via chat history inspection.
-// Additional IDs can be added as they are discovered.
-const MODEL_ID_MAP: Record<string, number> = {
-  "adapta-one": 14,
-  "adapta-gpt": 14,
-  "adapta-claude": 14,
-  "adapta-gemini": 14,
-  "adapta-grok": 14,
-  "adapta-deepseek": 14,
-  "adapta-llama": 14,
+const MODEL_ID_MAP: Record<string, string> = {
+  "adapta-one": "ONE",
+  "adapta-one-pro": "ONE_PRO",
+  "adapta-one-superfast": "ONE_SUPERFAST",
+  "adapta-gpt-56-luna": "GPT_56_LUNA",
+  "adapta-gpt-54-mini": "GPT_54_MINI",
+  "adapta-claude-5-sonnet": "CLAUDE_5_SONNET",
+  "adapta-claude-4-6-sonnet": "CLAUDE_4_6_SONNET",
+  "adapta-claude-4-5-haiku": "CLAUDE_4_5_HAIKU",
+  "adapta-gemini-3-5-flash": "GEMINI_3_5_FLASH",
+  "adapta-gemini-3-1-pro-preview": "GEMINI_3_1_PRO_PREVIEW",
+  "adapta-kimi-k2-7-code": "KIMI_K2_7_CODE",
+  "adapta-kimi-k2-6": "KIMI_K2_6",
+  "adapta-kimi-k2-5": "KIMI_K2_5",
+  "adapta-minimax-m3": "MINIMAX_M3",
+  "adapta-minimax-m2-7-highspeed": "MINIMAX_M2_7_HIGHSPEED",
+  "adapta-minimax-m2-7": "MINIMAX_M2_7",
+  "adapta-qwen-3-7-plus": "QWEN_3_7_PLUS",
+  "adapta-qwen-3-6-plus": "QWEN_3_6_PLUS",
+  "adapta-qwen-3-5-flash": "QWEN_3_5_FLASH",
+  "adapta-glm-5-2": "GLM_5_2",
+  "adapta-deepseek": "DEEPSEEK_V4_FLASH_UPDATED",
+  "adapta-grok-43": "GROK_43",
+  "adapta-muse-spark-1-1": "MUSE_SPARK_1_1",
+  "adapta-sonar-pro": "SONAR_PRO",
+  "adapta-nvidia-nemotron-super": "NVIDIA_NEMOTRON_SUPER",
 };
+
+// Default Adapta model key when none is provided
+const DEFAULT_AI_MODEL_ID = "ONE";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -387,7 +402,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     // 2. Build Adapta request body
-    const aiModelId = MODEL_ID_MAP[model] ?? DEFAULT_AI_MODEL_ID;
+    const aiModelId = MODEL_ID_MAP[model] || DEFAULT_AI_MODEL_ID;
     const adaptaMessages = buildAdaptaMessages(effectiveMessages);
 
     if (adaptaMessages.length === 0) {
