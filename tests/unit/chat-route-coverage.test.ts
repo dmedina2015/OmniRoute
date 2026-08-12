@@ -233,34 +233,48 @@ test("handleChat applies task-aware routing when a semantic override is enabled"
   assert.equal(json.choices[0].message.content, "Task-routed response");
 });
 
-test("handleChat routes exact combo names and can recover via global fallback", async () => {
+test("handleChat keeps protected combo fallback separate from Global Fallback Model", async () => {
   await seedConnection("openai", { apiKey: "sk-openai-combo-route" });
+  const ordinaryTarget = await seedConnection("deepseek", {
+    apiKey: "sk-deepseek-combo-backup",
+  });
   await seedConnection("claude", { apiKey: "sk-claude-global-fallback" });
   await combosDb.createCombo({
     name: "router-global-fallback",
     strategy: "priority",
     config: { maxRetries: 0, retryDelayMs: 0 },
-    models: ["openai/gpt-4.1"],
+    models: [
+      {
+        kind: "model",
+        model: "openai/gpt-4.1",
+        fallbackOnlyOnQuotaExhaustion: true,
+      },
+      {
+        kind: "model",
+        model: "deepseek/deepseek-v4-flash",
+        connectionId: ordinaryTarget.id,
+      },
+    ],
   });
   await settingsDb.updateSettings({
     globalFallbackModel: "claude/claude-3-5-sonnet-20241022",
   });
 
-  let attempts = 0;
-  globalThis.fetch = async (_url, init = {}) => {
-    attempts += 1;
-    const headers = toPlainHeaders(init.headers);
-    if (attempts === 1) {
-      assert.equal(headers.Authorization ?? headers.authorization, "Bearer sk-openai-combo-route");
+  const attemptedKeys: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const headers = toPlainHeaders(init?.headers);
+    const key = headers["x-api-key"] ?? headers.Authorization ?? headers.authorization ?? "";
+    attemptedKeys.push(key);
+    if (key === "sk-deepseek-combo-backup") {
+      assert.fail("protected primary must not invoke the ordinary combo target");
+    }
+    if (key === "Bearer sk-openai-combo-route") {
       return new Response(JSON.stringify({ error: { message: "primary combo failed" } }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });
     }
-    assert.equal(
-      headers["x-api-key"] ?? headers.Authorization ?? headers.authorization,
-      "sk-claude-global-fallback"
-    );
+    assert.equal(key, "sk-claude-global-fallback");
     return buildClaudeResponse("Global fallback answered");
   };
 
@@ -276,7 +290,7 @@ test("handleChat routes exact combo names and can recover via global fallback", 
   const json = (await response.json()) as any;
 
   assert.equal(response.status, 200);
-  assert.equal(attempts, 2);
+  assert.deepEqual(attemptedKeys, ["Bearer sk-openai-combo-route", "sk-claude-global-fallback"]);
   assert.equal(json.choices[0].message.content, "Global fallback answered");
 });
 

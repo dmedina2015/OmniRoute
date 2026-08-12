@@ -28,6 +28,7 @@ import {
 } from "@/domain/quotaCache";
 import { getQuotaScopeLabelForProvider } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
+import { preferAntigravityConnectionsWithStoredProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
 import {
   isAccountUnavailable,
   getUnavailableUntil,
@@ -55,6 +56,15 @@ import {
   classifyProviderError,
   PROVIDER_ERROR_TYPES,
 } from "@omniroute/open-sse/services/errorClassifier.ts";
+import {
+  ALIBABA_FREE_DRAINED_LOCK_MS,
+  getAlibabaBillingMode,
+  isAlibabaFreeQuotaExhaustedError,
+  isAlibabaModelFreeDrained,
+  isAlibabaModelStudioProvider,
+  mergeAlibabaFreeDrainedModels,
+  rehydrateAlibabaFreeDrainedModelLocks,
+} from "@omniroute/open-sse/services/alibabaFreeTier.ts";
 
 import {
   getCodexModelScope,
@@ -73,8 +83,10 @@ import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import {
   applySessionAffinityPin,
   formatSessionKeyForLog,
+  resolveForcedConnectionForCredentialPool,
   resolveSessionAffinityTtlMs,
   selectSessionAffinityConnection,
+  syncSessionAffinityRuntimeFields,
 } from "./sessionAffinityPin";
 import {
   isAnonymousFallbackDisabledBySettings,
@@ -83,9 +95,15 @@ import {
 import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import { getNoAuthHydrationProviderIds } from "./noAuthProviderSiblings";
 import { getResource404Bypass } from "./requestResourceHealth";
+import { isVertexConnectionWidePermissionDenied } from "./vertexErrorClassifier";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
 import { readHeaderValue, type AuthRequestHeaders } from "./headerReader.ts";
+import {
+  getOAuthSessionAvailability,
+  reserveOAuthSession,
+} from "@omniroute/open-sse/services/oauthSessionOccupancy.ts";
+
 type JsonRecord = Record<string, unknown>;
 interface RecoverableConnectionState {
   connectionId: string;
@@ -104,6 +122,7 @@ interface CredentialSelectionOptions {
   excludeConnectionIds?: string[] | null;
   sessionKey?: string | null;
   sessionAffinityTtlMs?: number | null;
+  reserveOAuthSession?: boolean;
 }
 interface CooldownInspectionState {
   connection: ProviderConnectionView;
@@ -1037,6 +1056,15 @@ export async function getProviderCredentials(
     let connections = (Array.isArray(connectionsRaw) ? connectionsRaw : [])
       .map(createLazyConnectionView)
       .filter((conn) => conn.id.length > 0);
+    if (isAlibabaModelStudioProvider(provider)) {
+      for (const conn of connections) {
+        rehydrateAlibabaFreeDrainedModelLocks(
+          provider,
+          conn.id,
+          conn.providerSpecificData as Record<string, unknown>
+        );
+      }
+    }
     // allowedConnections: restrict to specific connection IDs (from API key policy, #363)
     if (allowedConnections && allowedConnections.length > 0) {
       connections = connections.filter((conn) => allowedConnections.includes(conn.id));
@@ -1058,6 +1086,19 @@ export async function getProviderCredentials(
         isQuotaPolicyBlocked: (c) =>
           evaluateQuotaLimitPolicy(provider, c as ProviderConnectionView, requestedModel).blocked,
       }) ?? forcedConnectionId;
+
+    forcedConnectionId = resolveForcedConnectionForCredentialPool({
+      forcedConnectionId,
+      excludedConnectionIds,
+      connections,
+      allowRateLimitedConnections,
+      bypassQuotaPolicy,
+      isQuotaExhausted: (connectionId) =>
+        isQuotaExhaustedForRequest(connectionId, provider, requestedModel),
+      isQuotaPolicyBlocked: (connection) =>
+        evaluateQuotaLimitPolicy(provider, connection as ProviderConnectionView, requestedModel)
+          .blocked,
+    });
 
     if (forcedConnectionId) {
       connections = connections.filter((conn) => conn.id === forcedConnectionId);
@@ -1181,7 +1222,7 @@ export async function getProviderCredentials(
     let familyLockedCount = 0;
     const connectionFilterStatus = new Map<string, string>();
     // Filter out unavailable accounts and excluded connection
-    const availableConnections = connections.filter((c) => {
+    let availableConnections = connections.filter((c) => {
       if (excludedConnectionIds.has(c.id)) {
         connectionFilterStatus.set(c.id, "excluded");
         return false;
@@ -1204,7 +1245,15 @@ export async function getProviderCredentials(
           return false;
         }
         // Per-model lockout: if this specific model/family is locked on this connection, skip it
-        if (requestedModel && isModelLocked(provider, c.id, requestedModel)) {
+        if (
+          requestedModel &&
+          (isModelLocked(provider, c.id, requestedModel) ||
+            isAlibabaModelFreeDrained(
+              provider,
+              c.providerSpecificData as Record<string, unknown>,
+              requestedModel
+            ))
+        ) {
           connectionFilterStatus.set(c.id, "modelLocked");
           if (
             provider === "antigravity" &&
@@ -1220,6 +1269,14 @@ export async function getProviderCredentials(
       connectionFilterStatus.set(c.id, "available");
       return true;
     });
+
+    if (provider === "antigravity" || provider === "agy") {
+      const projectAwareConnections =
+        preferAntigravityConnectionsWithStoredProject(availableConnections);
+      if (projectAwareConnections.length > 0) {
+        availableConnections = projectAwareConnections;
+      }
+    }
 
     log.debug(
       "AUTH",
@@ -1456,7 +1513,15 @@ export async function getProviderCredentials(
       };
     }
 
-    const orderedConnections = withQuota;
+    const orderedConnections = [...withQuota].sort((a, b) => {
+      if (a.authType !== "oauth" || b.authType !== "oauth") return 0;
+      const priorityDelta = (a.priority || 999) - (b.priority || 999);
+      if (priorityDelta !== 0) return priorityDelta;
+      return (
+        getOAuthSessionAvailability(b.id, options.sessionKey) -
+        getOAuthSessionAvailability(a.id, options.sessionKey)
+      );
+    });
 
     const providerStrategyOverrides = (settings.providerStrategies || {}) as Record<
       string,
@@ -1474,6 +1539,7 @@ export async function getProviderCredentials(
     );
     if (affinityConnection) {
       connection = affinityConnection;
+      syncSessionAffinityRuntimeFields(connectionsRaw, connection);
     } else if (options.sessionKey) {
       log.info(
         "AUTH",
@@ -1637,6 +1703,26 @@ export async function getProviderCredentials(
       connection = orderedConnections[0];
     }
 
+    if (options.reserveOAuthSession === true && connection?.authType === "oauth") {
+      const selectedPriority = connection.priority || 999;
+      const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);
+      const moreAvailablePeer = [...orderedConnections]
+        .filter(
+          (candidate) =>
+            candidate.authType === "oauth" && (candidate.priority || 999) <= selectedPriority + 1
+        )
+        .sort(
+          (a, b) =>
+            getOAuthSessionAvailability(b.id, options.sessionKey) -
+            getOAuthSessionAvailability(a.id, options.sessionKey)
+        )
+        .find(
+          (candidate) =>
+            getOAuthSessionAvailability(candidate.id, options.sessionKey) > selectedAvailability
+        );
+      if (moreAvailablePeer) connection = moreAvailablePeer;
+    }
+
     if (provider === "antigravity" && connection) {
       log.info(
         "AUTH",
@@ -1649,6 +1735,11 @@ export async function getProviderCredentials(
     if (apiKeyHealth) {
       syncHealthFromDB(connection.id, apiKeyHealth);
     }
+
+    const releaseOAuthSession =
+      options.reserveOAuthSession === true && connection.authType === "oauth" && options.sessionKey
+        ? reserveOAuthSession(connection.id, options.sessionKey)
+        : undefined;
 
     return {
       apiKey: connection.apiKey,
@@ -1671,6 +1762,7 @@ export async function getProviderCredentials(
       // connectionId name.
       id: connection.id,
       provider: connection.provider,
+      authType: connection.authType,
       email: connection.email,
       connectionId: connection.id,
       // Include current status for optimization check
@@ -1685,6 +1777,7 @@ export async function getProviderCredentials(
       // getProviderCredentialsWithQuotaPreflight can see them. Without this,
       // user-set cutoffs would silently never enforce.
       quotaWindowThresholds: connection.quotaWindowThresholds ?? null,
+      ...(releaseOAuthSession ? { releaseOAuthSession } : {}),
     };
   } finally {
     selectionLock.release();
@@ -1772,7 +1865,11 @@ export async function getProviderCredentialsWithQuotaPreflight(
       return credentials;
     }
 
-    const connectionId = credentials.connectionId;
+    const selectedCredentials = credentials as typeof credentials & {
+      connectionId?: string;
+      releaseOAuthSession?: () => void;
+    };
+    const connectionId = selectedCredentials.connectionId;
     if (!connectionId) {
       return credentials;
     }
@@ -1842,13 +1939,21 @@ export async function getProviderCredentialsWithQuotaPreflight(
     const modelAwarePreflight = provider === "codex" || provider === "openrouter";
     const preflightCredentials =
       requestedModel && modelAwarePreflight ? { ...credentials, requestedModel } : credentials;
-    const preflight = await preflightQuota(provider, connectionId, preflightCredentials, {
-      resolveMinRemainingPercent,
-      resolveWarnRemainingPercent: () => warnThresholdPercent,
-    });
+    let preflight;
+    try {
+      preflight = await preflightQuota(provider, connectionId, preflightCredentials, {
+        resolveMinRemainingPercent,
+        resolveWarnRemainingPercent: () => warnThresholdPercent,
+      });
+    } catch (error) {
+      selectedCredentials.releaseOAuthSession?.();
+      throw error;
+    }
     if (preflight.proceed) {
       return credentials;
     }
+
+    selectedCredentials.releaseOAuthSession?.();
 
     const unavailableUntil = await markQuotaPreflightAccountUnavailable(
       provider,
@@ -1978,6 +2083,9 @@ export async function markAccountUnavailable(
 
     // Read passthroughModels from connection config (user-configured per-model quota)
     const connProviderSpecificData = (conn?.providerSpecificData as Record<string, unknown>) || {};
+    if (provider && conn) {
+      rehydrateAlibabaFreeDrainedModelLocks(provider, connectionId, connProviderSpecificData);
+    }
     const connectionPassthroughModels = connProviderSpecificData.passthroughModels as
       boolean | undefined;
     // #2997: per-connection opt-out of the TRANSIENT connection cooldown. When set,
@@ -2087,6 +2195,51 @@ export async function markAccountUnavailable(
     if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
     const providerErrorType = classifyProviderError(status, errorText, provider);
 
+    if (
+      isAlibabaModelStudioProvider(provider) &&
+      status === 403 &&
+      model &&
+      isAlibabaFreeQuotaExhaustedError(errorText)
+    ) {
+      const billingMode = getAlibabaBillingMode(connProviderSpecificData);
+      if (billingMode === "free") {
+        const persistedProviderSpecificData = mergeAlibabaFreeDrainedModels(
+          connProviderSpecificData,
+          model
+        );
+        await updateProviderConnection(connectionId, {
+          providerSpecificData: persistedProviderSpecificData,
+          lastErrorType: "free_quota_exhausted",
+          lastError: `Model ${model} free quota exhausted`,
+          lastErrorAt: new Date().toISOString(),
+          errorCode: status,
+        });
+        rehydrateAlibabaFreeDrainedModelLocks(
+          provider!,
+          connectionId,
+          persistedProviderSpecificData
+        );
+        recordModelLockoutFailure(
+          provider!,
+          connectionId,
+          model!,
+          "free_quota_exhausted",
+          status,
+          0,
+          effectiveProviderProfile,
+          {
+            exactCooldownMs: ALIBABA_FREE_DRAINED_LOCK_MS,
+            maxCooldownMs: ALIBABA_FREE_DRAINED_LOCK_MS,
+          }
+        );
+        log.info(
+          "AUTH",
+          `Alibaba free-tier drain for ${provider}:${model} — model permanently removed from routing (billingMode=free)`
+        );
+        return { shouldFallback: true, cooldownMs: 0 };
+      }
+    }
+
     if (provider && resolveProviderId(provider) === "grok-web" && status === 403 && model) {
       const lockout = recordModelLockoutFailure(
         provider,
@@ -2130,7 +2283,14 @@ export async function markAccountUnavailable(
         : rawCooldownMs;
 
     // ── #3027: per-model subscription/permission 403 → model-only lockout ──
-    if (isPerModelQuotaProvider && status === 403 && provider && model && !terminalStatus) {
+    if (
+      isPerModelQuotaProvider &&
+      status === 403 &&
+      provider &&
+      model &&
+      !terminalStatus &&
+      !(provider === "vertex" && isVertexConnectionWidePermissionDenied(errorText))
+    ) {
       const lockout = recordModelLockoutFailure(
         provider,
         connectionId,

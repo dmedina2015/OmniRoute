@@ -17,6 +17,9 @@
  * connection, so the existing 429-driven `deleteSessionAccountAffinity`
  * failover still owns rotating away from a pin that stops working.
  *
+ * @changes
+ * - [2026-07-24] [Composer] - Drop forcedConnectionId when excluded or ineligible (429 loop fix)
+ *
  * This module stays decoupled from auth.ts internals: the three predicates that
  * live in (or would cause a cycle back into) auth.ts —
  * `isTerminalConnectionStatus`, `isCodexScopeUnavailable`, and the quota-policy
@@ -29,7 +32,7 @@ import {
   touchSessionAccountAffinity,
   deleteSessionAccountAffinity,
 } from "@/lib/db/sessionAccountAffinity";
-import { updateProviderConnection } from "@/lib/db/providers";
+import { touchConnectionLastUsed } from "@/lib/db/providers";
 import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import { isAccountQuotaExhausted } from "@/domain/quotaCache";
 import {
@@ -52,6 +55,16 @@ export interface SessionAffinityConnection {
   lastUsedAt?: string | null;
   consecutiveUseCount?: number | null;
   priority?: number | null;
+}
+
+export function syncSessionAffinityRuntimeFields(
+  connections: SessionAffinityConnection[],
+  selected: SessionAffinityConnection
+): void {
+  const cached = connections.find((connection) => connection.id === selected.id);
+  if (!cached) return;
+  cached.lastUsedAt = selected.lastUsedAt;
+  cached.consecutiveUseCount = selected.consecutiveUseCount;
 }
 
 export function formatSessionKeyForLog(sessionKey: string): string {
@@ -89,10 +102,10 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
     const connection = connections.find((candidate) => candidate.id === existing.connectionId);
     if (connection) {
       touchSessionAccountAffinity(sessionKey, provider, Date.now(), ttlMs);
-      await updateProviderConnection(connection.id, {
-        lastUsedAt: new Date().toISOString(),
-        consecutiveUseCount: (connection.consecutiveUseCount || 0) + 1,
-      });
+      const nextCount = (connection.consecutiveUseCount || 0) + 1;
+      await touchConnectionLastUsed(connection.id, nextCount);
+      connection.lastUsedAt = new Date().toISOString();
+      connection.consecutiveUseCount = nextCount;
       log.info(
         "AUTH",
         `session_key=${formatSessionKeyForLog(sessionKey)} -> connection ${connection.id.slice(
@@ -114,10 +127,9 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
   if (!connection) return null;
 
   upsertSessionAccountAffinity(sessionKey, provider, connection.id, Date.now(), ttlMs);
-  await updateProviderConnection(connection.id, {
-    lastUsedAt: new Date().toISOString(),
-    consecutiveUseCount: 1,
-  });
+  await touchConnectionLastUsed(connection.id, 1);
+  connection.lastUsedAt = new Date().toISOString();
+  connection.consecutiveUseCount = 1;
   log.info(
     "AUTH",
     `new affinity created for session_key=${formatSessionKeyForLog(
@@ -163,9 +175,7 @@ export function resolveSessionAffinityTtlMs(
 ): number {
   const override = Number(options.sessionAffinityTtlMs);
   if (Number.isFinite(override) && override > 0) return override;
-  const configured = Number(
-    settings.sessionAffinityTtlMs ?? settings.codexSessionAffinityTtlMs
-  );
+  const configured = Number(settings.sessionAffinityTtlMs ?? settings.codexSessionAffinityTtlMs);
   if (Number.isFinite(configured) && configured > 0) return configured;
   return 0;
 }
@@ -254,4 +264,42 @@ export function applySessionAffinityPin(params: ApplySessionAffinityPinParams): 
     `session affinity pin ${pinned.connectionId.slice(0, 8)}... overrides forcedConnectionId ${forcedConnectionId.slice(0, 8)}... (#5903)`
   );
   return pinned.connectionId;
+}
+
+export interface ResolveForcedConnectionForPoolParams {
+  forcedConnectionId: string | null;
+  excludedConnectionIds: ReadonlySet<string>;
+  connections: AffinityPinConnection[];
+  allowRateLimitedConnections: boolean;
+  bypassQuotaPolicy: boolean;
+  isQuotaExhausted: (connectionId: string) => boolean;
+  isQuotaPolicyBlocked: (connection: AffinityPinConnection) => boolean;
+}
+
+/**
+ * Reset-aware combo routing pins a single `forcedConnectionId` per target. When
+ * that account 429s (quota exhausted / cooldown), the chat retry loop excludes
+ * it — but keeping the force would narrow the pool back to the same dead
+ * account. Drop the pin whenever the forced id is excluded or no longer eligible.
+ */
+export function resolveForcedConnectionForCredentialPool(
+  params: ResolveForcedConnectionForPoolParams
+): string | null {
+  const forced = params.forcedConnectionId?.trim() || null;
+  if (!forced || params.excludedConnectionIds.has(forced)) return null;
+
+  if (params.connections.length === 0) {
+    return forced;
+  }
+
+  const forcedConn = params.connections.find((conn) => conn.id === forced);
+  if (!forcedConn) return null;
+
+  if (!params.allowRateLimitedConnections && isAccountUnavailable(forcedConn.rateLimitedUntil)) {
+    return null;
+  }
+  if (params.isQuotaExhausted(forced)) return null;
+  if (!params.bypassQuotaPolicy && params.isQuotaPolicyBlocked(forcedConn)) return null;
+
+  return forced;
 }

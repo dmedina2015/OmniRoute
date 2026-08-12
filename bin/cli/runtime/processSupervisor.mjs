@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { writePidFile, cleanupPidFile, killAllSubprocesses, isPidRunning } from "../utils/pid.mjs";
 import {
   RESTART_RESET_MS,
@@ -8,7 +8,7 @@ import {
   computeRestartDelayMs,
   waitUntilPortFree,
 } from "./supervisorPolicy.mjs";
-import { buildNodeRuntimeArgs } from "../../../scripts/build/runtime-env.mjs";
+import { buildNodeHeapArgs } from "../../../scripts/build/runtime-env.mjs";
 import { stopProcessGracefully } from "../../../src/shared/platform/windowsProcess.ts";
 import {
   isFatalInstrumentationHookFailure,
@@ -47,19 +47,20 @@ export class ServerSupervisor {
     // #5238: skip the explicit CLI --max-old-space-size when the user pinned the
     // heap via NODE_OPTIONS (a CLI arg would shadow/override their value). The
     // calibrated heap is already carried by env.NODE_OPTIONS either way.
+    const heapArgs = buildNodeHeapArgs(process.env, this.memoryLimit);
     // #6321: stdout used to be discarded (`"ignore"`) whenever `--log`/OMNIROUTE_SHOW_LOG
     // wasn't set (the default) — any debug/pino output written to stdout vanished
     // silently, so a boot that never becomes ready looked like a dead hang with zero
     // output even at APP_LOG_LEVEL=debug. Pipe stdout too and buffer it alongside
     // stderr so a readiness timeout can surface what the child actually printed.
-    // #9156: macOS launchd cannot resolve bare "node" because its PATH is
-    // minimal. Always use process.execPath (the absolute path to the running
-    // Node.js binary) so the supervisor never depends on PATH resolution.
     this.child = spawn(
-      process.execPath,
-      process.versions.bun
-        ? [this.serverPath]
-        : buildNodeRuntimeArgs(process.env, this.memoryLimit, this.serverPath),
+      process.versions.bun ? process.execPath : "node",
+      [
+        ...(process.versions.bun
+          ? ["--preload", join(dirname(this.serverPath), "open-sse/utils/setupPolyfill.ts")]
+          : heapArgs),
+        this.serverPath,
+      ],
       {
         cwd: dirname(this.serverPath),
         env: this.env,

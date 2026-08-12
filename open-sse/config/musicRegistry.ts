@@ -33,6 +33,15 @@ export const MUSIC_PROVIDERS: Record<string, MusicProvider> = {
     models: [{ id: "lyria-002", name: "Lyria 2 (Vertex)" }],
   },
 
+  "fal-ai": {
+    id: "fal-ai",
+    baseUrl: "https://queue.fal.run",
+    authType: "apikey",
+    authHeader: "key",
+    format: "fal-ai-music",
+    models: [{ id: "ace-step", name: "ACE-Step" }],
+  },
+
   kie: {
     id: "kie",
     baseUrl: "https://api.kie.ai",

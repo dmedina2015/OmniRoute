@@ -1,14 +1,25 @@
 import { isLocalStreamLifecycleError } from "../../shared/utils/circuitBreaker";
 import { isRequestScopedUpstreamFailure } from "./comboFailureLogging";
+import { getTrustedLocalRateLimitResponse } from "@omniroute/open-sse/services/rateLimitManager/errors";
 
 export const PROVIDER_BREAKER_FAILURE_STATUSES = new Set([408, 500, 502, 503, 504]);
+
+export function isProviderBreakerFailureStatus(status: number): boolean {
+  return PROVIDER_BREAKER_FAILURE_STATUSES.has(Number(status));
+}
 
 // #7907/#7908: single-model breaker trip bypasses the `isFailure` option (only applies
 // inside `breaker.execute()`), so it needs its own `isLocalStreamLifecycleError` guard —
 // otherwise a client abort (502 default, error='request_signal_aborted') trips the
 // provider-wide breaker. Pure predicate, unit-testable without the full request path.
 export function shouldTripProviderBreakerForResult(
-  result: { status: number; errorCode?: string | null; errorType?: string | null; error?: unknown },
+  result: {
+    status: number;
+    response?: Response;
+    errorCode?: string | null;
+    errorType?: string | null;
+    error?: unknown;
+  },
   isCombo: boolean,
   forceLiveComboTest: boolean
 ): boolean {
@@ -16,7 +27,14 @@ export function shouldTripProviderBreakerForResult(
     !forceLiveComboTest &&
     !isCombo &&
     !isRequestScopedUpstreamFailure({ code: result.errorCode, type: result.errorType }) &&
+    !(result.response && getTrustedLocalRateLimitResponse(result.response)) &&
     !isLocalStreamLifecycleError(result.error) &&
+    // Network-layer errors (ECONNREFUSED, ETIMEDOUT) never reached the provider —
+    // the provider may be healthy, only the network path is broken. OmniRoute's own
+    // rate-limit queue timeouts are backpressure we applied, not a provider failure.
+    result.errorCode !== "proxy_unreachable" &&
+    result.errorCode !== "RATE_LIMIT_QUEUE_TIMEOUT" &&
+    result.errorCode !== "RATE_LIMIT_QUEUE_WEDGED" &&
     PROVIDER_BREAKER_FAILURE_STATUSES.has(Number(result.status))
   );
 }

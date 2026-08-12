@@ -95,6 +95,9 @@ export function tierToWeightVariant(tier?: AutoTier): AutoVariant | "reliability
 interface PoolCandidate {
   provider: string;
   model: string;
+  resolvedSupportsVision?: boolean;
+  resolvedReasoning?: boolean;
+  resolvedSupportsThinking?: boolean;
 }
 
 /**
@@ -110,6 +113,9 @@ export function buildAutoCandidateFilter(
 
   if (category === "vision" || category === "multimodal") {
     checks.push((c) => {
+      if (c.resolvedSupportsVision !== undefined) {
+        return c.resolvedSupportsVision || isVisionModelId(c.model);
+      }
       try {
         const caps = getResolvedModelCapabilities({ provider: c.provider, model: c.model });
         const capable =
@@ -127,6 +133,9 @@ export function buildAutoCandidateFilter(
   }
   if (category === "reasoning") {
     checks.push((c) => {
+      if (c.resolvedReasoning !== undefined && c.resolvedSupportsThinking !== undefined) {
+        return c.resolvedReasoning || c.resolvedSupportsThinking;
+      }
       try {
         const caps = getResolvedModelCapabilities({ provider: c.provider, model: c.model });
         return caps.reasoning === true || caps.supportsThinking === true;

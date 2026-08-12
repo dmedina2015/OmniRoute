@@ -44,14 +44,19 @@
       "count": 11
     }
   },
-  "open-sse/executors/vertex.ts": {
+  "open-sse/executors/tinycms.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
     }
   },
-  "open-sse/handlers/chatCore.ts": {
-    "no-restricted-imports": {
+  "open-sse/executors/tinycmsSigner.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "open-sse/executors/vertex.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
     }
   },
   "open-sse/handlers/chatCore/codexFailover.ts": {

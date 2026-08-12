@@ -61,8 +61,14 @@ test("buildUrl uses responses endpoint for gpt-5.4-mini and gpt-5.6-sol", () => 
   const credentials: ProviderCredentials = {
     providerSpecificData: { gheUrl: "https://ghe.company.com" },
   };
-  assert.strictEqual(executor.buildUrl("gpt-5.4-mini", true, 0, credentials), "https://ghe.company.com/responses");
-  assert.strictEqual(executor.buildUrl("ghe-copilot/gpt-5.6-sol", true, 0, credentials), "https://ghe.company.com/responses");
+  assert.strictEqual(
+    executor.buildUrl("gpt-5.4-mini", true, 0, credentials),
+    "https://ghe.company.com/responses"
+  );
+  assert.strictEqual(
+    executor.buildUrl("ghe-copilot/gpt-5.6-sol", true, 0, credentials),
+    "https://ghe.company.com/responses"
+  );
 });
 
 test("buildUrl uses chat/completions endpoint for claude and gemini models", () => {
@@ -74,8 +80,14 @@ test("buildUrl uses chat/completions endpoint for claude and gemini models", () 
   const credentials: ProviderCredentials = {
     providerSpecificData: { gheUrl: "https://ghe.company.com" },
   };
-  assert.strictEqual(executor.buildUrl("claude-opus-5", true, 0, credentials), "https://ghe.company.com/chat/completions");
-  assert.strictEqual(executor.buildUrl("gemini-3.5-flash", true, 0, credentials), "https://ghe.company.com/chat/completions");
+  assert.strictEqual(
+    executor.buildUrl("claude-opus-5", true, 0, credentials),
+    "https://ghe.company.com/chat/completions"
+  );
+  assert.strictEqual(
+    executor.buildUrl("gemini-3.5-flash", true, 0, credentials),
+    "https://ghe.company.com/chat/completions"
+  );
 });
 
 test("buildUrl handles gheUrl with trailing slash", () => {
@@ -152,6 +164,8 @@ test("executor extends GithubExecutor", () => {
     clientSecret: "test-secret",
   });
   assert.strictEqual(executor.constructor.name, "GheCopilotExecutor");
+  assert.strictEqual(executor.getProvider(), "ghe-copilot");
+  assert.strictEqual(executor.config.baseUrl, "https://api.githubcopilot.com/chat/completions");
 });
 
 test("isValidGheUrl accepts https enterprise hosts and rejects malformed or non-https input", async () => {

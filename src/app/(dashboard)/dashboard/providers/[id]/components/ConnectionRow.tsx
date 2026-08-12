@@ -40,6 +40,7 @@ export interface ConnectionRowConnection {
   errorCode?: string | number;
   globalPriority?: number;
   providerSpecificData?: Record<string, unknown>;
+  defaultModel?: string | null;
   expiresAt?: string;
   tokenExpiresAt?: string;
   maxConcurrent?: number | null;
@@ -249,7 +250,7 @@ function getStatusPresentation(
   if (errorType === "account_deactivated") {
     return {
       statusVariant: "error",
-      statusLabel: t("statusDeactivated", "Deactivated"),
+      statusLabel: providerText(t, "statusDeactivated", "Deactivated"),
       errorType,
       errorBadge,
       errorTextClass: "text-red-600 font-bold",
@@ -304,7 +305,7 @@ function getStatusPresentation(
   if (errorType === "banned") {
     return {
       statusVariant: "error",
-      statusLabel: t("statusBanned", "Banned (403)"),
+      statusLabel: providerText(t, "statusBanned", "Banned (403)"),
       errorType,
       errorBadge,
       errorTextClass: "text-red-600 font-bold",
@@ -314,7 +315,7 @@ function getStatusPresentation(
   if (errorType === "credits_exhausted") {
     return {
       statusVariant: "warning",
-      statusLabel: t("statusCreditsExhausted", "Out of Credits"),
+      statusLabel: providerText(t, "statusCreditsExhausted", "Out of Credits"),
       errorType,
       errorBadge,
       errorTextClass: "text-amber-500",
@@ -399,22 +400,10 @@ export default function ConnectionRow({
         t("oauthAccount")
       )
     : connection.name;
-  const applyCodexAuthLabel =
-    typeof t.has === "function" && t.has("applyCodexAuthLocal")
-      ? t("applyCodexAuthLocal")
-      : "Apply auth";
-  const exportCodexAuthLabel =
-    typeof t.has === "function" && t.has("exportCodexAuthFile")
-      ? t("exportCodexAuthFile")
-      : "Export auth";
-  const applyClaudeAuthLabel =
-    typeof t.has === "function" && t.has("applyClaudeAuthLocal")
-      ? t("applyClaudeAuthLocal")
-      : "Apply auth";
-  const exportClaudeAuthLabel =
-    typeof t.has === "function" && t.has("exportClaudeAuthFile")
-      ? t("exportClaudeAuthFile")
-      : "Export auth";
+  const applyCodexAuthLabel = providerText(t, "applyCodexAuthLocal", "Apply auth");
+  const exportCodexAuthLabel = providerText(t, "exportCodexAuthFile", "Export auth");
+  const applyClaudeAuthLabel = providerText(t, "applyClaudeAuthLocal", "Apply auth");
+  const exportClaudeAuthLabel = providerText(t, "exportClaudeAuthFile", "Export auth");
   // Use useState + useEffect for impure Date.now() to avoid calling during render
   const [isCooldown, setIsCooldown] = useState(false);
   // T12: token expiry status — lazy init avoids calling Date.now() during render;

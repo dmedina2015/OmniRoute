@@ -30,7 +30,7 @@ function immediateButSafeTimeout(
   ms?: number,
   ...args: unknown[]
 ) {
-  if (ms === 20_000 || ms === 5_000) {
+  if (ms === 20_000 || ms === 5_000 || ms === 2_000) {
     return originalSetTimeout(callback as TimerHandler, 0, ...args);
   }
   return originalSetTimeout(callback as TimerHandler, ms, ...args);
@@ -208,12 +208,12 @@ test("video route dispatches submit→poll job flow for custom model with agnes-
     calls.push({ url: stringUrl, method, body: requestBody, headers });
 
     if (stringUrl === "https://custom.example.com/v1/videos") {
-      return createResponse(JSON.stringify({ task_id: "task-123" }), {
+      return createResponse(JSON.stringify({ video_id: "video-123", task_id: "task-123" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     }
-    if (stringUrl === "https://custom.example.com/v1/videos/task-123") {
+    if (stringUrl === "https://custom.example.com/agnesapi?video_id=video-123") {
       return createResponse(
         JSON.stringify({
           status: "completed",
@@ -250,13 +250,13 @@ test("video route dispatches submit→poll job flow for custom model with agnes-
   assert.equal(calls.length, 2);
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].url, "https://custom.example.com/v1/videos");
-  assert.equal(calls[0].headers["x-api-key"], "custom-key");
+  assert.equal(calls[0].headers.Authorization, "Bearer custom-key");
   assert.deepEqual(calls[0].body, {
     model: "job-video-v1",
     prompt: "a cat playing piano",
   });
   assert.equal(calls[1].method, "GET");
-  assert.equal(calls[1].url, "https://custom.example.com/v1/videos/task-123");
+  assert.equal(calls[1].url, "https://custom.example.com/agnesapi?video_id=video-123");
 });
 
 test("video route returns 502 when job preset reports failed status", async () => {
@@ -284,7 +284,7 @@ test("video route returns 502 when job preset reports failed status", async () =
 
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
     if (String(url).endsWith("/v1/videos")) {
-      return createResponse(JSON.stringify({ task_id: "task-fail" }), {
+      return createResponse(JSON.stringify({ video_id: "video-fail", task_id: "task-fail" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });

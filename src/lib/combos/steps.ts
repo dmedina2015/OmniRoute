@@ -25,6 +25,7 @@ export interface ComboModelStep {
   label?: string;
   prompt?: string | null;
   tags?: string[];
+  fallbackOnlyOnQuotaExhaustion?: boolean;
 }
 
 export interface ComboRefStep {
@@ -33,6 +34,7 @@ export interface ComboRefStep {
   comboName: string;
   weight: number;
   label?: string;
+  fallbackOnlyOnQuotaExhaustion?: boolean;
 }
 
 export interface ComboProviderWildcardStep {
@@ -287,6 +289,7 @@ export function normalizeComboStep(
   const weight = toWeight(value.weight);
   const label = toTrimmedString(value.label);
   const prompt = toTrimmedString(value.prompt);
+  const fallbackOnlyOnQuotaExhaustion = value.fallbackOnlyOnQuotaExhaustion === true;
 
   if (value.kind === "combo-ref") {
     const comboRefName = toTrimmedString(value.comboName);
@@ -297,6 +300,7 @@ export function normalizeComboStep(
       comboName: comboRefName,
       weight,
       ...(label ? { label } : {}),
+      ...(fallbackOnlyOnQuotaExhaustion ? { fallbackOnlyOnQuotaExhaustion: true } : {}),
     };
   }
 
@@ -409,6 +413,7 @@ export function normalizeComboStep(
     ...(prompt ? { prompt } : {}),
     ...(tags && tags.length > 0 ? { tags } : {}),
     ...(allowedConnectionIds && allowedConnectionIds.length > 0 ? { allowedConnectionIds } : {}),
+    ...(fallbackOnlyOnQuotaExhaustion ? { fallbackOnlyOnQuotaExhaustion: true } : {}),
   };
 }
 

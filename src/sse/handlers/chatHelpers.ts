@@ -17,6 +17,7 @@ import {
   providerCircuitOpenResponse,
   unavailableResponse,
 } from "@omniroute/open-sse/utils/error.ts";
+import { inheritTrustedLocalRateLimitResponse } from "@omniroute/open-sse/services/rateLimitManager/errors.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import {
   runWithProxyContext,
@@ -445,6 +446,12 @@ export async function executeChatWithBreaker({
         runWithProxyContext(proxyInfo?.proxy || null, () =>
           (handleChatCore as any)({
             body: { ...body, model: `${provider}/${model}` },
+            // #2905-followup: forward the already-resolved custom-model targetFormat
+            // override through as modelInfo.targetFormat. Without this, chatCore.ts's
+            // own resolveChatCoreRequestSetup() reads customModelTargetFormat off THIS
+            // modelInfo object (not the one resolveModelOrError computed it from) and
+            // finds nothing, silently re-deriving targetFormat from the static registry
+            // / provider default and discarding the DB override a second time.
             modelInfo: {
               provider,
               model,
@@ -898,7 +905,7 @@ export function withSessionHeader(response: Response, sessionId: string | null):
       headers: response.headers,
     });
     cloned.headers.set("X-OmniRoute-Session-Id", sessionId);
-    return cloned;
+    return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }
 
@@ -915,7 +922,7 @@ export function withCorrelationId(response: Response, correlationId: string | nu
       headers: response.headers,
     });
     cloned.headers.set("X-Correlation-Id", correlationId);
-    return cloned;
+    return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }
 
@@ -960,6 +967,6 @@ export function withSelectedConnectionHeader(
       headers: response.headers,
     });
     cloned.headers.set("X-OmniRoute-Selected-Connection-Id", connectionId);
-    return cloned;
+    return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }

@@ -170,8 +170,17 @@ export function findModelName(aliasOrId: string, modelId: string): string {
 }
 
 export function getModelTargetFormat(aliasOrId: string, modelId: string): string | null {
-  const models = PROVIDER_MODELS[aliasOrId];
-  const found = models?.find((m) => m.id === modelId) || getGlobalModel(modelId);
+  // Accept either the public alias ("cmd") or the raw provider id ("command-code"),
+  // mirroring getProviderModels (same pattern as #2798/#3870).
+  const alias = PROVIDER_ID_TO_ALIAS[aliasOrId] || aliasOrId;
+  const models = PROVIDER_MODELS[alias];
+  // Strip provider prefix if present: "openai/gpt-5.6-luna" → "gpt-5.6-luna"
+  const prefix = alias + "/";
+  const bareModelId =
+    typeof modelId === "string" && modelId.startsWith(prefix)
+      ? modelId.slice(prefix.length)
+      : modelId;
+  const found = models?.find((m) => m.id === bareModelId);
   if (found?.targetFormat) return found.targetFormat;
   // #5842: OpenAI "*-pro" reasoning models (o1-pro, gpt-5.x-pro) are only served by
   // the native /v1/responses endpoint — /v1/chat/completions 404s ("only supported
@@ -179,10 +188,17 @@ export function getModelTargetFormat(aliasOrId: string, modelId: string): string
   // covers dynamically-synced ids that post-date the catalog (same spirit as the gh
   // executor's /codex/i routing, 9router#102). Scoped to the openai alias so other
   // providers shipping *-pro ids keep their own endpoint semantics.
-  if (aliasOrId === "openai" && /-pro$/i.test(modelId)) return "openai-responses";
-  return null;
+  if (alias === "openai" && /-pro$/i.test(modelId)) return "openai-responses";
+  // Model-level targetFormat is provider-scoped: a catalog entry declares how THIS
+  // provider's endpoint serves the model. When the provider has its own catalog but
+  // the model is not in it, do NOT import the global entry's tag — it encodes the
+  // DECLARING provider's endpoint semantics (e.g. ghe-copilot tags gpt-5.6-* as
+  // openai-responses, which must not hijack command-code's chat-shaped
+  // /alpha/generate → 502 "Invalid prompt: messages must not be empty"). Providers
+  // with no catalog at all keep the global fallback as their only metadata source.
+  if (models) return null;
+  return getGlobalModel(bareModelId)?.targetFormat ?? null;
 }
-
 export function getModelStripTypes(aliasOrId: string, modelId: string): string[] {
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models)

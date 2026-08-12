@@ -30,6 +30,7 @@ import { sortCatalogModelsProviderGrouped } from "./catalogOrder";
 import {
   disambiguateCatalogModelNames,
   enrichCatalogModelEntry,
+  type CatalogEnrichmentSnapshot,
 } from "@/lib/modelMetadataRegistry";
 import { isModelCatalogNamesEnabled } from "@/shared/utils/featureFlags";
 import { extractApiKey } from "@/sse/services/auth";
@@ -189,7 +190,8 @@ export async function finalizeCatalogResponse(
   request: Request,
   finalModels: Array<Record<string, unknown>>,
   getContextFallback: (model: Record<string, unknown>) => number | undefined,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  enrichmentSnapshot?: CatalogEnrichmentSnapshot
 ): Promise<Response> {
   const apiKey = extractApiKey(request);
   if (apiKey) {
@@ -210,7 +212,7 @@ export async function finalizeCatalogResponse(
       if (model.owned_by === "combo") {
         return maybeOmitCatalogModelName(model, includeModelNames);
       }
-      const enriched = enrichCatalogModelEntry(model);
+      const enriched = enrichCatalogModelEntry(model, undefined, enrichmentSnapshot);
       const fallbackContextLength = getContextFallback(enriched);
       const listedModel = fallbackContextLength
         ? { ...enriched, context_length: fallbackContextLength }

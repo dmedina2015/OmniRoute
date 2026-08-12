@@ -126,8 +126,10 @@ test("POST /api/keys creates a key, preserves special characters, and persists n
   assert.equal(response.status, 201);
   assert.equal(body.name, "Key / Prod #1");
   assert.equal(body.noLog, true);
+  assert.equal(body.compressionEnabled, true);
   assert.match(body.key, /^sk-[a-z0-9-]+/i);
   assert.equal(stored?.noLog, true);
+  assert.equal(stored?.compressionEnabled, true);
   assert.equal(compliance.isNoLog(body.id), true);
 });
 
@@ -410,6 +412,7 @@ test("PATCH /api/keys/[id] updates permissions and rejects invalid payloads", as
         allowedConnections: [],
         isActive: false,
         maxSessions: 2,
+        compressionEnabled: false,
       },
     }),
     { params: Promise.resolve({ id: created.id }) }
@@ -439,9 +442,11 @@ test("PATCH /api/keys/[id] updates permissions and rejects invalid payloads", as
   assert.equal(patchBody.noLog, true);
   assert.equal(patchBody.isActive, false);
   assert.equal(patchBody.maxSessions, 2);
+  assert.equal(patchBody.compressionEnabled, false);
   assert.deepEqual(updated?.allowedModels, ["gpt-4.1-mini"]);
   assert.equal(updated?.noLog, true);
   assert.equal(updated?.isActive, false);
+  assert.equal(updated?.compressionEnabled, false);
   assert.equal(invalidJsonResponse.status, 400);
   assert.equal(invalidJsonBody.error.message, "Invalid request");
   assert.equal(missingKeyResponse.status, 404);

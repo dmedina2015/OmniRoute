@@ -35,6 +35,7 @@ import {
   AUTO_SUFFIX_VARIANTS,
   AUTO_FAMILY_IDS,
   createBuiltinAutoCombo,
+  prepareBuiltinAutoComboInputs,
   isPaidTierAutoId,
 } from "@omniroute/open-sse/services/autoCombo/builtinCatalog";
 import type { SyncedAvailableModel } from "@/lib/db/models";
@@ -52,8 +53,9 @@ import {
   INTERNAL_PROXY_ERROR,
   getCanonicalModelMetadata,
   getCatalogDiagnosticsHeaders,
+  type CatalogEnrichmentSnapshot,
 } from "@/lib/modelMetadataRegistry";
-import { getSyncedCapability } from "@/lib/modelsDevSync";
+import { getModelsDevPricing, getSyncedCapability } from "@/lib/modelsDevSync";
 import { getModelSpec } from "@/shared/constants/modelSpecs";
 import { getModelsCatalogPrefixMode } from "@/shared/utils/featureFlags";
 import { applyCatalogPostFilters, finalizeCatalogResponse } from "./catalogResponse";
@@ -114,18 +116,31 @@ export { getCustomVisionCapabilityFields };
 // lives in ./catalogCache. Re-exported here because the existing tests import the
 // hooks from this module, and CATALOG_STALE_WHILE_REVALIDATE_MS is part of the
 // documented behavior of this endpoint.
-import { CATALOG_CACHE_TTL_MS_DEFAULT, resolveCachedCatalogResponse } from "./catalogCache";
+import {
+  CATALOG_CACHE_TTL_MS_DEFAULT,
+  resolveCachedCatalogResponse,
+  type CatalogCachePolicy,
+} from "./catalogCache";
 
 export {
   CATALOG_STALE_WHILE_REVALIDATE_MS,
+  getCatalogStaleWhileRevalidateMs,
   __resetCatalogBuilderRunsForTest,
   __getCatalogBuilderRunsForTest,
   __expireCatalogCacheForTest,
   __setCatalogCacheEntryForTest,
   __flushCatalogBackgroundRefreshForTest,
   __forceCatalogInFlightRejectionForTest,
+  __setCatalogStaleWhileRevalidateAccessorForTest,
+  __setCatalogStaleWhileRevalidateMsForTest,
 } from "./catalogCache";
-export type { CachedCatalog } from "./catalogCache";
+export type { CachedCatalog, CatalogCachePolicy } from "./catalogCache";
+
+const BUILTIN_AUTO_YIELD_INTERVAL = 8;
+
+function yieldCatalogBuildTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 /**
  * Build unified OpenAI-compatible model catalog response.
@@ -133,7 +148,8 @@ export type { CachedCatalog } from "./catalogCache";
  */
 export async function getUnifiedModelsResponse(
   request: Request,
-  corsHeaders: Record<string, string> = {}
+  corsHeaders: Record<string, string> = {},
+  cachePolicy: CatalogCachePolicy = {}
 ) {
   const diagnosticHeaders = getCatalogDiagnosticsHeaders({ request });
 
@@ -166,6 +182,7 @@ export async function getUnifiedModelsResponse(
       request,
       { corsHeaders, diagnosticHeaders },
       buildCatalogPayload,
+      cachePolicy,
       {
         hideAutoCombos: settingsForAuth?.hideAutoCombos === true,
         hideNoThinkVariants: settingsForAuth?.hideNoThinkVariants === true,
@@ -599,51 +616,63 @@ async function buildUnifiedModelsResponseCore(
     // #4164 entry is emitted instead, so the id is never dropped.
     // #4235 Phase B: also advertise the curated `auto/<category>[:<tier>]` combos.
     // #6453: also advertise the `auto/<family>` combos (auto/glm, auto/minimax, ...).
-    // #9418: skip the entire loop when hideAutoCombos is on — the ids are still
-    // routable when sent explicitly, just not advertised in the catalog.
-    if (!hideAuto) {
-      for (const autoId of [
-        ...Object.keys(AUTO_TEMPLATE_VARIANTS),
-        ...AUTO_SUFFIX_VARIANTS,
-        ...AUTO_FAMILY_IDS,
-      ]) {
-        if (blockedProviders.has("auto") || listedIds.has(autoId)) continue; // #5192
-        // #6328 (follow-up to #6495 / #6512): REMOVE — not just hide — paid-tier
-        // auto/* ids (auto/pro-* + auto/*:pro) from the advertised catalog when the
-        // operator opts into hidePaidModels. The candidate-pool filter in
-        // virtualFactory (#6512) still gates request-time routing for the rest.
-        if (hidePaid && isPaidTierAutoId(autoId)) continue;
-        listedIds.add(autoId);
-        const baseAutoEntry = {
-          id: autoId,
-          object: "model",
-          created: timestamp,
-          owned_by: "combo",
-          permission: [],
-          root: autoId,
-          parent: null,
-        };
-        try {
-          const suffix = autoId.replace(/^auto\/?/, "");
-          const virtualCombo = await createBuiltinAutoCombo(autoId, suffix);
-          const contextLength = virtualCombo.advertisedContextLength || 128000;
-          const maxOutputTokens = virtualCombo.advertisedMaxOutputTokens || 8192;
-          models.push({
-            ...baseAutoEntry,
-            context_length: contextLength,
-            max_input_tokens: contextLength,
-            max_output_tokens: maxOutputTokens,
-            capabilities: {
-              tool_calling: true,
-              reasoning: true,
-              thinking: true,
-              temperature: true,
-            },
-          });
-        } catch (err) {
-          console.log(`[catalog] Could not materialize built-in auto model ${autoId}:`, err);
-          models.push(baseAutoEntry);
+    // #9199: prepare the shared connection/settings/registry candidate snapshot once for this
+    // catalog build. Runtime auto routing still prepares fresh request-scoped inputs.
+    let preparedAutoInputs: Awaited<ReturnType<typeof prepareBuiltinAutoComboInputs>> | undefined;
+    let materializedAutoCount = 0;
+    for (const autoId of [
+      ...Object.keys(AUTO_TEMPLATE_VARIANTS),
+      ...AUTO_SUFFIX_VARIANTS,
+      ...AUTO_FAMILY_IDS,
+    ]) {
+      // #9418: skip the entire loop when hideAutoCombos is on — the ids are still
+      // routable when sent explicitly, just not advertised in the catalog.
+      if (hideAuto) break;
+      if (blockedProviders.has("auto") || listedIds.has(autoId)) continue; // #5192
+      // #6328 (follow-up to #6495 / #6512): REMOVE — not just hide — paid-tier
+      // auto/* ids (auto/pro-* + auto/*:pro) from the advertised catalog when the
+      // operator opts into hidePaidModels. The candidate-pool filter in
+      // virtualFactory (#6512) still gates request-time routing for the rest.
+      if (hidePaid && isPaidTierAutoId(autoId)) continue;
+      listedIds.add(autoId);
+      const baseAutoEntry = {
+        id: autoId,
+        object: "model",
+        created: timestamp,
+        owned_by: "combo",
+        permission: [],
+        root: autoId,
+        parent: null,
+      };
+      try {
+        const suffix = autoId.replace(/^auto\/?/, "");
+        if (!preparedAutoInputs) {
+          preparedAutoInputs = await prepareBuiltinAutoComboInputs();
+          await yieldCatalogBuildTurn();
         }
+        const virtualCombo = await createBuiltinAutoCombo(autoId, suffix, preparedAutoInputs);
+        const contextLength = virtualCombo.advertisedContextLength || 128000;
+        const maxOutputTokens = virtualCombo.advertisedMaxOutputTokens || 8192;
+        models.push({
+          ...baseAutoEntry,
+          context_length: contextLength,
+          max_input_tokens: contextLength,
+          max_output_tokens: maxOutputTokens,
+          capabilities: {
+            tool_calling: true,
+            reasoning: true,
+            thinking: true,
+            temperature: true,
+          },
+        });
+      } catch (err) {
+        console.log(`[catalog] Could not materialize built-in auto model ${autoId}:`, err);
+        models.push(baseAutoEntry);
+      }
+
+      materializedAutoCount++;
+      if (materializedAutoCount % BUILTIN_AUTO_YIELD_INTERVAL === 0) {
+        await yieldCatalogBuildTurn();
       }
     }
 
@@ -754,9 +783,13 @@ async function buildUnifiedModelsResponseCore(
           staticModelId: model.id,
           syncedModelIds: syncedForProvider ? [...syncedForProvider] : [],
         });
+        const hasDeclaredEffortTiers =
+          Array.isArray(model.supportedThinkingEfforts) &&
+          model.supportedThinkingEfforts.length > 0;
         if (
           coveredBySynced &&
-          (exclusiveListing || !isRegisteredEffortVariant(providerModels, model.id))
+          (exclusiveListing ||
+            (!isRegisteredEffortVariant(providerModels, model.id) && !hasDeclaredEffortTiers))
         )
           continue;
         if (!providerSupportsModel(canonicalProviderId, model.id)) continue;
@@ -767,6 +800,18 @@ async function buildUnifiedModelsResponseCore(
 
         const visionFields =
           getVisionCapabilityFields(aliasId) || getVisionCapabilityFields(model.id);
+        const thinkingFields = getThinkingCapabilityFields(
+          canonicalProviderId,
+          model.id,
+          model.supportsReasoning,
+          model.supportedThinkingEfforts,
+          // Skip the canonical fallback for static models without declared tiers —
+          // otherwise the catalog synthesizes unresolvable `<prefix>/<model>-{tier}`
+          // ids for every static reasoning model across all providers (#9485 review).
+          !hasDeclaredEffortTiers
+        );
+        const thinkingCapabilities =
+          Object.keys(thinkingFields).length > 0 ? { capabilities: thinkingFields } : {};
         if (includeAlias) {
           models.push({
             id: aliasId,
@@ -777,6 +822,8 @@ async function buildUnifiedModelsResponseCore(
             root: model.id,
             parent: null,
             ...(visionFields || {}),
+            ...thinkingFields,
+            ...thinkingCapabilities,
           });
         }
         if (
@@ -797,6 +844,8 @@ async function buildUnifiedModelsResponseCore(
             root: model.id,
             parent: includeAlias ? aliasId : null,
             ...(providerVisionFields || {}),
+            ...thinkingFields,
+            ...thinkingCapabilities,
           });
         }
       }
@@ -1589,10 +1638,31 @@ async function buildUnifiedModelsResponseCore(
       return modelId ? getTokenLimit(canonicalId, modelId) : getTokenLimit(canonicalId);
     };
 
-    return finalizeCatalogResponse(request, finalModels, getDefaultContextFallback, {
-      ...corsHeaders,
-      ...diagnosticHeaders,
-    });
+    let enrichmentSnapshot: CatalogEnrichmentSnapshot | undefined;
+    if (finalModels.some((model) => model.owned_by !== "combo")) {
+      let modelsDevPricing: ReturnType<typeof getModelsDevPricing> | null = null;
+      try {
+        modelsDevPricing = getModelsDevPricing();
+      } catch {
+        // Pricing lookup is optional; hardcoded defaults still enrich the response.
+      }
+      enrichmentSnapshot = { modelsDevPricing };
+      // The production profile identified pricing snapshot construction as the last
+      // dominant synchronous stage. Let already-queued health checks run before the
+      // remaining in-memory enrichment and JSON serialization.
+      await yieldCatalogBuildTurn();
+    }
+
+    return finalizeCatalogResponse(
+      request,
+      finalModels,
+      getDefaultContextFallback,
+      {
+        ...corsHeaders,
+        ...diagnosticHeaders,
+      },
+      enrichmentSnapshot
+    );
   } catch (error) {
     console.log("Error fetching models:", error);
     // Hard rule #12 — this is the realistically reachable 500 for the endpoint

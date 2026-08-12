@@ -9,6 +9,8 @@
  */
 
 import type { AccessSchedule, RateLimitRule } from "./types";
+export { parseModelAccessMode } from "./modelAccessMode";
+export type { ModelAccessMode } from "./modelAccessMode";
 
 /**
  * Helper function to safely parse allowed_models JSON
@@ -53,6 +55,12 @@ export function parseChaosModeEnabled(value: unknown): boolean {
 
 export function parseIsActive(value: unknown): boolean {
   // DEFAULT 1 — active unless explicitly set to 0
+  if (value === 0 || value === "0" || value === false) return false;
+  return true;
+}
+
+export function parseCompressionEnabled(value: unknown): boolean {
+  // DEFAULT 1 — preserve compression for legacy rows unless explicitly disabled.
   if (value === 0 || value === "0" || value === false) return false;
   return true;
 }
@@ -162,4 +170,8 @@ export function parseIsBanned(value: unknown): boolean {
 
 export function parseStreamDefaultMode(value: unknown): "legacy" | "json" {
   return value === "json" ? "json" : "legacy";
+}
+
+export function parseCacheDefaultMode(value: unknown): "legacy" | "bypass" {
+  return value === "bypass" ? "bypass" : "legacy";
 }

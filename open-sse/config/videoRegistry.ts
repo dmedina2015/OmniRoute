@@ -30,6 +30,21 @@ interface VideoProvider {
 }
 
 export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
+  agnes: {
+    id: "agnes",
+    baseUrl: "https://apihub.agnes-ai.com",
+    statusUrl: "https://apihub.agnes-ai.com/agnesapi",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "agnes-video-job",
+    models: [
+      {
+        id: "agnes-video-v2.0",
+        name: "Agnes Video V2.0",
+      },
+    ],
+  },
+
   "qwen-cloud-token-plan": {
     id: "qwen-cloud-token-plan",
     alias: "qct",
@@ -81,6 +96,7 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     format: "fal-ai-video",
     models: [
       { id: "veo3.1/lite", name: "Veo 3.1 Lite" },
+      { id: "google/gemini-omni-flash", name: "Gemini Omni Flash" },
       {
         id: "xai/grok-imagine-video/text-to-video",
         name: "Grok Imagine Video",

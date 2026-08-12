@@ -1,39 +1,132 @@
 /**
- * Re-export from `antigravityProjectPersist.ts` plus a connection-preference helper.
+ * @file antigravityProjectPersistence.ts
+ * @description Persist Antigravity Cloud Code projectId discovered at runtime and prefer
+ *   healthy accounts during dynamic multi-account selection.
  *
- * The persistence layer for a runtime-discovered Antigravity projectId lives in
- * the sibling file `antigravityProjectPersist.ts` (named by its core function).
- * This module adds `preferAntigravityConnectionsWithStoredProject()`, used by the
- * quota-strategy engine to give priority to connections whose projectId has
- * already been discovered and persisted.
+ * @changes
+ * - [2026-07-24] [Composer] - Persist runtime loadCodeAssist projectId; filter broken accounts
  */
 
-import { persistDiscoveredAntigravityProjectId } from "./antigravityProjectPersist.ts";
+import { updateProviderConnection } from "@/lib/db/providers";
 
-export { persistDiscoveredAntigravityProjectId };
+export type AntigravityProjectConnectionLike = {
+  projectId?: string | null;
+  providerSpecificData?: unknown;
+  errorCode?: string | null;
+};
 
-/**
- * Prefer Antigravity connections with a discovered/stored `projectId` for
- * reset-aware quota routing.
- *
- * This is a preference, not a hard requirement: when no candidate has a stored
- * projectId, retain the full pool rather than making freshly-added accounts unusable.
- */
-function hasStoredProjectId(connection: Record<string, unknown>): boolean {
-  if (typeof connection.projectId === "string" && connection.projectId.trim().length > 0) {
-    return true;
+export function extractAntigravityProjectIdFromPayload(
+  data: Record<string, unknown> | null | undefined
+): string | null {
+  if (!data || typeof data !== "object") return null;
+
+  const raw = data.cloudaicompanionProject;
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const id = (raw as Record<string, unknown>).id;
+    if (typeof id === "string" && id.trim()) return id.trim();
   }
-  const providerSpecificData = connection.providerSpecificData;
-  if (providerSpecificData && typeof providerSpecificData === "object") {
-    const nested = (providerSpecificData as Record<string, unknown>).projectId;
-    if (typeof nested === "string" && nested.trim().length > 0) return true;
-  }
-  return false;
+  return null;
 }
 
-export function preferAntigravityConnectionsWithStoredProject<T extends Record<string, unknown>>(
+export function getStoredAntigravityProjectId(
+  connection: Pick<AntigravityProjectConnectionLike, "projectId" | "providerSpecificData">
+): string | null {
+  const column = typeof connection.projectId === "string" ? connection.projectId.trim() : "";
+  if (column) return column;
+
+  const psd = connection.providerSpecificData as Record<string, unknown> | undefined;
+  const fromPsd = typeof psd?.projectId === "string" ? psd.projectId.trim() : "";
+  return fromPsd || null;
+}
+
+const persistInFlight = new Set<string>();
+
+export function persistDiscoveredAntigravityProjectId(
+  connectionId: string | null | undefined,
+  projectId: string,
+  existingProviderSpecificData?: Record<string, unknown> | null
+): void {
+  const trimmed = projectId.trim();
+  if (!connectionId || !trimmed) return;
+
+  const dedupeKey = `${connectionId}:${trimmed}`;
+  if (persistInFlight.has(dedupeKey)) return;
+  persistInFlight.add(dedupeKey);
+
+  const providerSpecificData = {
+    ...(existingProviderSpecificData || {}),
+    projectId: trimmed,
+  };
+
+  void updateProviderConnection(connectionId, {
+    projectId: trimmed,
+    errorCode: null,
+    lastError: null,
+    lastErrorType: null,
+    providerSpecificData,
+  })
+    .catch(() => {})
+    .finally(() => {
+      persistInFlight.delete(dedupeKey);
+    });
+}
+
+export function markAntigravityMissingCloudCodeProject(
+  connectionId: string | null | undefined
+): void {
+  if (!connectionId) return;
+
+  void updateProviderConnection(connectionId, {
+    errorCode: "missing_project_id",
+    lastError:
+      "Missing Google projectId for Antigravity account. Reconnect OAuth after completing Gemini Code Assist onboarding.",
+    lastErrorType: "oauth_missing_project_id",
+  }).catch(() => {});
+}
+
+/**
+ * When dynamic routing spans multiple Antigravity accounts, prefer connections that
+ * already have a stored Cloud Code projectId. Accounts confirmed missing a project
+ * (422) are skipped when alternatives exist. If every account lacks a stored project,
+ * keep the full pool so request-time loadCodeAssist discovery can still recover (#2334).
+ */
+export function preferAntigravityConnectionsWithStoredProject<T extends object>(
   connections: T[]
 ): T[] {
-  const withStoredProject = connections.filter(hasStoredProjectId);
-  return withStoredProject.length > 0 ? withStoredProject : connections;
+  if (connections.length <= 1) return connections;
+
+  const hasStoredProject = (connection: T): boolean => {
+    const record = connection as Record<string, unknown>;
+    if (typeof record.projectId === "string" && record.projectId.trim()) return true;
+    let psd = record.providerSpecificData;
+    if (typeof psd === "string") {
+      try {
+        psd = JSON.parse(psd);
+      } catch {
+        return false;
+      }
+    }
+    if (!psd || typeof psd !== "object") return false;
+    const projectId = (psd as Record<string, unknown>).projectId;
+    return typeof projectId === "string" && projectId.trim().length > 0;
+  };
+
+  const withoutKnownMissing = connections.filter(
+    (connection) =>
+      (connection as Record<string, unknown>).errorCode !== "missing_project_id" ||
+      hasStoredProject(connection)
+  );
+  const pool = withoutKnownMissing.length > 0 ? withoutKnownMissing : connections;
+
+  const withStored = pool.filter(hasStoredProject);
+  if (withStored.length > 0 && withStored.length < pool.length) {
+    return withStored;
+  }
+  return pool;
+}
+
+/** Test helper — reset in-flight dedupe guards. */
+export function clearAntigravityProjectPersistenceInFlight(): void {
+  persistInFlight.clear();
 }

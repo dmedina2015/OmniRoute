@@ -215,6 +215,62 @@ test("VB-S02b: respects native vision support for GPT-family models", async () =
   }
 });
 
+test("VB-S02c: Conol multimodal models bypass the vision bridge", async () => {
+  const guardrail = createGuardrail();
+  const model = "conol-web/claude-fable-5-xhigh";
+  const payload = createPayload({
+    model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+          },
+        ],
+      },
+    ],
+  });
+  visionCallCount = 0;
+
+  const result = await guardrail.preCall(payload, createContext({ model }));
+
+  assert.equal(getResolvedModelCapabilities(model).supportsVision, true);
+  assert.strictEqual(result.block, false);
+  assert.strictEqual(result.modifiedPayload, undefined);
+  assert.strictEqual(visionCallCount, 0);
+});
+
+test("VB-S02d: Conol text-only models remain eligible for the vision bridge", async () => {
+  const guardrail = createGuardrail();
+  const model = "conol-web/deepseek/deepseek-v4-pro";
+  const payload = createPayload({
+    model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,aW1hZ2U=" },
+          },
+        ],
+      },
+    ],
+  });
+  visionCallCount = 0;
+
+  const result = await guardrail.preCall(payload, createContext({ model }));
+
+  assert.equal(getResolvedModelCapabilities(model).supportsVision, false);
+  assert.strictEqual(result.block, false);
+  assert.notStrictEqual(result.modifiedPayload, undefined);
+  assert.strictEqual(visionCallCount, 1);
+});
+
 test("VB-S02: model capabilities returns supportsVision for known models", () => {
   const gpt4oCaps = getResolvedModelCapabilities("openai/gpt-4o");
   // supportsVision may be true (if sync data exists) or null (if not synced)
@@ -759,6 +815,46 @@ test("VB-CRED-01: does NOT whole-request-reroute when original model has usable 
   }
   const meta = result.meta as Record<string, unknown> | undefined;
   assert.notStrictEqual(meta?.rerouted, true, "must not set rerouted meta for credentialed model");
+});
+
+test("VB-CRED-01A: reroutes a credentialed text-only model when configured to preserve images", async () => {
+  mockSettings.visionBridgeRerouteTextOnly = true;
+  const guardrail = createGuardrail({
+    deps: {
+      hasUsableCredentials: async (m: string) =>
+        m === "zai/glm-5.2" || m === "openai/gpt-4o-mini" ? true : null,
+    },
+  });
+
+  const payload = createPayload({
+    model: "zai/glm-5.2",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is in this screenshot?" },
+          {
+            type: "image_url",
+            image_url: { url: "https://example.com/shot.png" },
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await guardrail.preCall(payload, createContext({ model: "zai/glm-5.2" }));
+  assert.strictEqual(result.block, false);
+
+  const modified = result.modifiedPayload as {
+    model?: string;
+    messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
+  };
+  assert.strictEqual(modified.model, "openai/gpt-4o-mini");
+  assert.deepStrictEqual(modified.messages[0].content[1], {
+    type: "image_url",
+    image_url: { url: "https://example.com/shot.png" },
+  });
+  assert.strictEqual(visionCallCount, 0, "the bridge must not replace the image with text");
 });
 
 test("VB-CRED-02: does NOT reroute to a vision model known to lack credentials", async () => {

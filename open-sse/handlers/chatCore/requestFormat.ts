@@ -94,6 +94,8 @@ export function resolveChatCoreRequestFormat(opts: {
     provider,
     sourceFormat,
     endpointPath,
+    body,
+    headers: clientRawRequest?.headers,
   });
   const nativeXaiResponsesPassthrough = shouldUseNativeXaiResponsesPassthrough({
     provider,

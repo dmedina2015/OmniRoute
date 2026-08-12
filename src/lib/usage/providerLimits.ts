@@ -28,6 +28,10 @@ import {
   extractCodeAssistOnboardTierId,
   extractCodeAssistSubscriptionTier,
 } from "@omniroute/open-sse/services/codeAssistSubscription.ts";
+import {
+  extractAntigravityProjectIdFromPayload,
+  getStoredAntigravityProjectId,
+} from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { onUsageRecorded } from "./usageEvents";
 import {
@@ -91,6 +95,8 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
   "firecrawl",
   // Command Code API key → /alpha/billing/credits + windowLimits
   "command-code",
+  "conol-web",
+  "cnl",
 ]);
 const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";
@@ -563,10 +569,28 @@ async function syncAntigravitySubscriptionIfNeeded(
     changed = true;
   }
 
+  const discoveredProjectId = extractAntigravityProjectIdFromPayload(
+    subscriptionInfo as Record<string, unknown>
+  );
+  const storedProjectId = getStoredAntigravityProjectId(connection);
+  let nextProjectId: string | undefined;
+  if (discoveredProjectId && !storedProjectId) {
+    nextPsd.projectId = discoveredProjectId;
+    nextProjectId = discoveredProjectId;
+    changed = true;
+  }
+
   if (!changed) return connection;
 
-  await updateProviderConnection(connection.id, { providerSpecificData: nextPsd });
-  return { ...connection, providerSpecificData: nextPsd };
+  await updateProviderConnection(connection.id, {
+    ...(nextProjectId ? { projectId: nextProjectId, errorCode: null, lastError: null } : {}),
+    providerSpecificData: nextPsd,
+  });
+  return {
+    ...connection,
+    ...(nextProjectId ? { projectId: nextProjectId, errorCode: null, lastError: null } : {}),
+    providerSpecificData: nextPsd,
+  };
 }
 
 /** Persist refreshed Claude bootstrap fields into psd; writes only on diff. */

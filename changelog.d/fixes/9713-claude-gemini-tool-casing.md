@@ -1,0 +1,1 @@
+- **fix(translator):** restore TitleCase tool names on the Claude → Gemini/Antigravity request path so Claude Code no longer fails with `No such tool available: read` ([#9713](https://github.com/diegosouzapw/OmniRoute/issues/9713))

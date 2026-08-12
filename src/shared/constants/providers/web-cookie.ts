@@ -3,6 +3,20 @@
  * Pure data literal; re-exported by the providers.ts barrel. No behavior change.
  */
 export const WEB_COOKIE_PROVIDERS = {
+  "chatgpt-web-codex": {
+    id: "chatgpt-web-codex",
+    alias: "cgpt-codex",
+    name: "ChatGPT Web (Codex)",
+    icon: "terminal",
+    color: "#10A37F",
+    textIcon: "CC",
+    website: "https://chatgpt.com",
+    authHint:
+      "Paste the full ChatGPT Cookie header. OmniRoute verifies it in an isolated headless browser profile.",
+    subscriptionRisk: true,
+    riskNoticeVariant: "webCookie",
+    toolCalling: "native",
+  },
   "chatgpt-web": {
     id: "chatgpt-web",
     alias: "cgpt-web",
@@ -125,7 +139,7 @@ export const WEB_COOKIE_PROVIDERS = {
     textIcon: "CP",
     website: "https://copilot.microsoft.com",
     authHint:
-      "Paste your access_token from copilot.microsoft.com (or export a .har file from DevTools while logged in)",
+      "Paste the access_token from an authenticated copilot.microsoft.com request (DevTools → Network → Authorization), or export a HAR while logged in",
     subscriptionRisk: true,
     riskNoticeVariant: "webCookie",
   },
@@ -379,6 +393,20 @@ export const WEB_COOKIE_PROVIDERS = {
     authHint:
       "Login at zenmux.ai, then export all cookies using EditThisCookie or Cookie-Editor and paste the full Cookie header string here. Refresh every ~30 days.",
   },
+  "tinycms-web": {
+    id: "tinycms-web",
+    alias: "tcw",
+    name: "TinyCMS Web (Free/Sub)",
+    icon: "layers",
+    color: "#ED8936",
+    textIcon: "TC",
+    website: "https://site.tinycms.xyz",
+    hasFree: true,
+    freeNote:
+      "Free tier has access to GPT 5.4, Gemini 3.5, and Grok 4.20 models. No login required. Subscription grants 300 requests/day for advanced models.",
+    authHint:
+      "Go to site.tinycms.xyz, open DevTools → Application → Local Storage, copy the value of 'app-config-uuid' (starts with 'R'), and paste it here.",
+  },
   "zai-web": {
     id: "zai-web",
     alias: "zw",
@@ -451,6 +479,19 @@ export const WEB_COOKIE_PROVIDERS = {
     riskNoticeVariant: "webCookie",
     authHint:
       "Paste the full Cookie header from hyperagent.com (DevTools → Network → any request → Request Headers → Cookie). Session cookies power chat + billing usage.",
+  },
+  "conol-web": {
+    id: "conol-web",
+    alias: "cnl",
+    name: "Conol (Unofficial/Experimental)",
+    icon: "auto_awesome",
+    color: "#F6C945",
+    textIcon: "CO",
+    website: "https://conol.ai",
+    subscriptionRisk: true,
+    riskNoticeVariant: "webCookie",
+    authHint:
+      "Use browser sign-in, or paste the full Cookie header from conol.ai. The __Secure-better-auth.session_token cookie is required.",
   },
 };
 

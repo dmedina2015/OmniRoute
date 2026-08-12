@@ -39,9 +39,7 @@
   "incremental": true,
   "incrementalFile": "reports/mutation/stryker-incremental.json",
   "testRunner": "tap",
-  "plugins": [
-    "@stryker-mutator/tap-runner"
-  ],
+  "plugins": ["@stryker-mutator/tap-runner"],
   "tap": {
     "testFiles": [
       "tests/unit/7993-noauth-proxy-routing.test.ts",
@@ -190,6 +188,7 @@
       "tests/unit/combo-stream-readiness-fallback.test.ts",
       "tests/unit/combo-streaming-empty-content-failover.test.ts",
       "tests/unit/combo-strict-random-distribution-3959.test.ts",
+      "tests/unit/combo-system-prompt-templates-5501.test.ts",
       "tests/unit/combo-target-defensive-modelstr.test.ts",
       "tests/unit/combo-vision-aware-routing.test.ts",
       "tests/unit/combo/auto-quota-cutoff.test.ts",
@@ -205,6 +204,7 @@
       "tests/unit/cooldown-epoch-string-3954.test.ts",
       "tests/unit/correctness/combo.property.test.ts",
       "tests/unit/correctness/sanitizers.property.test.ts",
+      "tests/unit/cursor-renewal.test.ts",
       "tests/unit/custom-model-target-format.test.ts",
       "tests/unit/db-reset-module-state.test.ts",
       "tests/unit/ddg-circuit-breaker-null-content-6999-7000.test.ts",
@@ -244,6 +244,7 @@
       "tests/unit/microsoft-designer-web-6672.test.ts",
       "tests/unit/middleware-header-strip-5849.test.ts",
       "tests/unit/middleware-hooks-error-sanitization.test.ts",
+      "tests/unit/model-catalog-runtime-invalidation.test.ts",
       "tests/unit/model-cooldowns-route-auth.test.ts",
       "tests/unit/model-cooldowns-route.test.ts",
       "tests/unit/model-lockout-decay.test.ts",
@@ -280,6 +281,8 @@
       "tests/unit/quota-streaming-consumption-usd.test.ts",
       "tests/unit/qwen-web-content-array-serialization.test.ts",
       "tests/unit/rate-limit-enhanced.test.ts",
+      "tests/unit/rate-limit-execution-timeout-message-4165.test.ts",
+      "tests/unit/rate-limit-local-error-classification.test.ts",
       "tests/unit/rate-limit-manager.test.ts",
       "tests/unit/rate-limit-queue-timeout-lockout.test.ts",
       "tests/unit/repro-7503-no-choices.test.ts",
@@ -292,6 +295,8 @@
       "tests/unit/rotation-config-omniroute.test.ts",
       "tests/unit/route-explainability.test.ts",
       "tests/unit/route-guard-acp-agents-local-only.test.ts",
+      "tests/unit/route-guard-cursor-agent-availability.test.ts",
+      "tests/unit/route-guard-cursor-refresh.test.ts",
       "tests/unit/route-guard-forge-jcode-settings-local-only.test.ts",
       "tests/unit/route-guard-grok-build-settings-local-only.test.ts",
       "tests/unit/route-guard-middleware-local-only.test.ts",
@@ -336,7 +341,8 @@
       "tests/unit/usage-service-hardening.test.ts",
       "tests/unit/validate-response-quality.test.ts",
       "tests/unit/xai-agent-tools-passthrough.test.ts",
-      "tests/unit/capability-filter.test.ts"
+      "tests/unit/capability-filter.test.ts",
+      "tests/unit/vertex-passthrough-model-lockout.test.ts"
     ],
     "nodeArgs": [
       "--import",
@@ -445,11 +451,7 @@
     ".worktrees",
     ".stryker-tmp"
   ],
-  "reporters": [
-    "progress",
-    "html",
-    "json"
-  ],
+  "reporters": ["progress", "html", "json"],
   "htmlReporter": {
     "fileName": "reports/mutation/mutation.html"
   },

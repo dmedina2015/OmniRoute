@@ -90,6 +90,9 @@ export async function deleteProviderConnection(id: string) {
 
   await _cleanupDeletedComboConnectionRefs(id);
   await _cleanupDeletedLKGPConnectionRefs(id);
+  void import("@omniroute/open-sse/services/combo/nativeCodexTurnPin.ts")
+    .then((module) => module.revokeNativeCodexTurnPinsForConnection(id))
+    .catch(() => {});
 
   removeConnectionHealth(id);
   removeConnectionIndex(id);
@@ -132,6 +135,9 @@ export async function deleteProviderConnections(ids: string[]): Promise<number> 
   for (const id of ids) {
     removeConnectionHealth(id);
     removeConnectionIndex(id);
+    void import("@omniroute/open-sse/services/combo/nativeCodexTurnPin.ts")
+      .then((module) => module.revokeNativeCodexTurnPinsForConnection(id))
+      .catch(() => {});
   }
 
   backupDbFile("pre-write");
@@ -169,6 +175,9 @@ export async function deleteProviderConnectionsByProvider(providerId: string) {
   for (const connectionId of connectionIds) {
     removeConnectionHealth(connectionId);
     removeConnectionIndex(connectionId);
+    void import("@omniroute/open-sse/services/combo/nativeCodexTurnPin.ts")
+      .then((module) => module.revokeNativeCodexTurnPinsForConnection(connectionId))
+      .catch(() => {});
   }
   backupDbFile("pre-write");
   invalidateDbCache("connections");

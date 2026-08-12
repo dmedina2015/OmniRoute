@@ -58,7 +58,7 @@ the natural shape is:
 - **Public HTTPS required.** Telegram only delivers updates to an HTTPS
   endpoint with a valid cert. Self-hosted OmniRoute behind Tailscale/ngrok
   needs a public tunnel or Cloudflare Tunnel for the webhook path
-  (a future webhook-URL setting). The dashboard can render the current
+  (`TELEGRAM_WEBHOOK_URL`-style env). The dashboard can render the current
   public origin (`OMNIROUTE_PUBLIC_BASE_URL`) but no webhook registration
   helper exists.
 - **Encryption gate.** `webhooks/route.ts:77` already refuses telegram
@@ -102,7 +102,7 @@ the natural shape is:
 1. Add `grammy` or `telegraf` (or ~60 lines of hand-rolled HMAC + fetch).
 2. Implement `src/lib/telegram/initData.ts` — `verifyInitData(initData, botToken)`.
 3. Stand up a throwaway `POST /api/telegram/miniapp/webhook` route behind
-   a dedicated webhook secret; register via `setWebhook` once, locally.
+   `TELEGRAM_WEBHOOK_SECRET`; register via `setWebhook` once, locally.
 
 ### Phase 1 — Minimal chat slice (1–2 dev-days)
 

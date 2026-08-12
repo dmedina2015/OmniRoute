@@ -105,6 +105,7 @@ export default defineConfig({
       "tests/unit/ui/combos-page-smoke.test.tsx", // #8618 — pre-existing failure; remove this exclusion when fixed
       "tests/unit/ui/evals-tab-smoke.test.tsx", // #8618 — pre-existing failure; remove this exclusion when fixed
     ],
+
     coverage: {
       reportsDirectory: "coverage",
     },

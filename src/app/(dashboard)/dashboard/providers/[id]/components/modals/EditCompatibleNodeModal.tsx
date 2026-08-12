@@ -5,6 +5,7 @@ import { Button, Badge, Input, Modal, Select, Toggle } from "@/shared/components
 import { isValidProviderIconUrl } from "@/shared/validation/iconUrl";
 import { CC_COMPATIBLE_DEFAULT_CHAT_PATH } from "../../providerDetailConstants";
 import NewApiAggregatorFields from "./NewApiAggregatorFields";
+import { providerText } from "../../providerPageHelpers";
 interface EditCompatibleNodeModalNode {
   id?: string;
   name?: string;
@@ -168,7 +169,10 @@ export default function EditCompatibleNodeModal({
         method: data.method ?? null,
       });
     } catch {
-      setValidationResult({ valid: false, error: "Network error" });
+      setValidationResult({
+        valid: false,
+        error: providerText(t, "networkError", "Network error"),
+      });
     } finally {
       setValidating(false);
     }

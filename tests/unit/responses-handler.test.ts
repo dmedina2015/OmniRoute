@@ -263,6 +263,22 @@ test("handleResponsesCore preserves Kimi K3 reasoning through provider translati
   assert.equal(native.call.body.messages?.[1]?.reasoning_content, "I should search first.");
 });
 
+test("handleResponsesCore maps unsupported Kimi K3 xhigh effort to max", async () => {
+  const { call, result } = await invokeResponsesCore({
+    body: {
+      model: "k3-256k",
+      reasoning: { effort: "xhigh", summary: "auto" },
+      input: "Reply with OK.",
+    },
+    provider: "kimi-coding-apikey",
+    model: "k3-256k",
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(call.body.thinking, { type: "enabled" });
+  assert.deepEqual(call.body.output_config, { effort: "max" });
+});
+
 test("handleResponsesCore strips previous_response_id by default and handles empty input arrays", async () => {
   const { call, result } = await invokeResponsesCore({
     body: {

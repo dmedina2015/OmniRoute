@@ -15,7 +15,10 @@ import { RESPONSES_PREVIOUS_RESPONSE_ID_MODES } from "@/shared/constants/respons
 // Import from the server-free constants leaf, NOT from `@/server/authz/routeGuard`:
 // this schema is reachable from client components (dashboard onboarding wizard), and
 // routeGuard drags in server runtime (→ ioredis) that breaks the client/CLI build.
-import { SPAWN_CAPABLE_PREFIXES } from "@/shared/constants/spawnCapablePrefixes";
+import {
+  SPAWN_CAPABLE_PREFIXES,
+  SPAWN_CAPABLE_PATTERN_ANCESTORS,
+} from "@/shared/constants/spawnCapablePrefixes";
 
 const signatureCacheModeValues = ["enabled", "bypass", "bypass-strict"] as const;
 
@@ -137,7 +140,10 @@ export const updateSettingsSchema = z.object({
   showProviderTopologyOnHome: z.boolean().optional(),
   localOnlyManageScopeBypassEnabled: z.boolean().optional(),
   // Layer 1 of the spawn-capable guard (Hard Rules #15/#17): reject any bypass
-  // prefix that reaches a SPAWN_CAPABLE_PREFIXES path at PATCH time, with the
+  // prefix that reaches a SPAWN_CAPABLE_PREFIXES path, or a
+  // SPAWN_CAPABLE_PATTERN_ANCESTORS ancestor (e.g. /api/providers/, the
+  // shared ancestor of the dynamic-segment routes in SPAWN_CAPABLE_PATTERNS
+  // such as /login and /refresh-cursor), at PATCH time, with the
   // BYPASS_PREFIX_NOT_ALLOWED code the settings route handler translates.
   // Layer 2 (isLocalOnlyBypassableByManageScope) still refuses spawn paths at
   // runtime even if a malformed DB row claims otherwise. This refine was in the
@@ -151,7 +157,10 @@ export const updateSettingsSchema = z.object({
         .refine(
           (prefix) => {
             const normalized = prefix.endsWith("/") ? prefix : `${prefix}/`;
-            return !SPAWN_CAPABLE_PREFIXES.some((sp) => normalized.startsWith(sp));
+            return (
+              !SPAWN_CAPABLE_PREFIXES.some((sp) => normalized.startsWith(sp)) &&
+              !SPAWN_CAPABLE_PATTERN_ANCESTORS.some((sp) => normalized.startsWith(sp))
+            );
           },
           {
             message:
@@ -347,6 +356,7 @@ export const updateSettingsSchema = z.object({
   modalityBridgeCacheEnabled: z.boolean().optional(),
   modalityBridgeCacheTtlMinutes: z.number().int().min(1).max(1440).optional(),
   modalityBridgeCacheMaxEntries: z.number().int().min(10).max(5000).optional(),
+  visionBridgeRerouteTextOnly: z.boolean().optional(),
   // Missing settings
   lkgpEnabled: z.boolean().optional(),
   // #1311: echo the requested alias/combo name in the response model field (opt-in)

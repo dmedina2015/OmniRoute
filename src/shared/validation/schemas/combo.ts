@@ -20,6 +20,7 @@ export const comboStepMetaSchema = {
   id: z.string().trim().min(1).max(200).optional(),
   weight: z.number().min(0).max(100).optional().default(0),
   label: z.string().trim().min(1).max(200).optional(),
+  fallbackOnlyOnQuotaExhaustion: z.boolean().optional(),
 };
 
 export const comboModelStepInputSchema = z.object({
@@ -87,6 +88,7 @@ export const scoringWeightsSchema = z
     specificityMatch: z.number().min(0).max(1).optional().default(0.05),
     contextAffinity: z.number().min(0).max(1).optional().default(0.08),
     cacheAffinity: z.number().min(0).max(1).optional().default(0),
+    sessionAvailability: z.number().min(0).max(1).optional().default(0.05),
     resetWindowAffinity: z.number().min(0).max(1).optional().default(0),
   })
   .optional();
@@ -284,29 +286,61 @@ export const comboNameSchema = z
     "Name can only contain letters, numbers, spaces, -, _, /, ., [ and ]."
   );
 
-export const createComboSchema = z.object({
-  name: comboNameSchema,
-  description: z.string().max(2000).optional(),
-  models: z.array(comboModelEntry).optional().default([]),
-  strategy: comboStrategySchema.optional().default("priority"),
-  config: comboRuntimeConfigSchema.optional(),
-  allowedProviders: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
-  allowedModelFamilies: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
-  system_message: z.string().max(50000).optional(),
-  tool_filter_regex: z.string().max(1000).optional(),
-  context_cache_protection: z.boolean().optional(),
-  context_length: z.number().int().min(1000).max(2000000).optional(),
-  // Optional embedding dimensions override for embedding combos.
-  // When set, the value is injected into every upstream embedding request as
-  // the `dimensions` field (and translated to `outputDimensionality` for Gemini).
-  // Stored as a string to match the OpenAI API convention; coerced to number
-  // by the embedding handler. Leave unset to use each model's default.
-  dimensions: z
-    .string()
-    .regex(/^\d+$/, "dimensions must be a positive integer string")
-    .optional()
-    .nullable(),
-});
+type QuotaOnlyComboRefState = {
+  models?: Array<z.infer<typeof comboModelEntry>>;
+  strategy?: string;
+  config?: z.infer<typeof comboRuntimeConfigSchema>;
+};
+
+export function requiresQuotaOnlyComboRefExecute(value: QuotaOnlyComboRefState): boolean {
+  const hasProtectedComboRef = value.models?.some(
+    (step) =>
+      typeof step === "object" &&
+      step.kind === "combo-ref" &&
+      step.fallbackOnlyOnQuotaExhaustion === true
+  );
+  return (
+    (value.strategy === undefined || value.strategy === "priority") &&
+    hasProtectedComboRef === true &&
+    value.config?.nestedComboMode !== "execute"
+  );
+}
+
+function validateQuotaOnlyComboRefs(value: QuotaOnlyComboRefState, ctx: z.RefinementCtx): void {
+  if (requiresQuotaOnlyComboRefExecute(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Quota-only combo references require nestedComboMode execute",
+      path: ["config", "nestedComboMode"],
+    });
+  }
+}
+
+export const createComboSchema = z
+  .object({
+    name: comboNameSchema,
+    description: z.string().max(2000).optional(),
+    models: z.array(comboModelEntry).optional().default([]),
+    strategy: comboStrategySchema.optional().default("priority"),
+    config: comboRuntimeConfigSchema.optional(),
+    allowedProviders: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+    allowedModelFamilies: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+    system_message: z.string().max(50000).optional(),
+    tool_filter_regex: z.string().max(1000).optional(),
+    context_cache_protection: z.boolean().optional(),
+    context_length: z.number().int().min(1000).max(2000000).optional(),
+    // Optional embedding dimensions override for embedding combos.
+    // When set, the value is injected into every upstream embedding request as
+    // the `dimensions` field (and translated to `outputDimensionality` for Gemini).
+    // Stored as a string to match the OpenAI API convention; coerced to number
+    // by the embedding handler. Leave unset to use each model's default.
+    dimensions: z
+      .string()
+      .regex(/^\d+$/, "dimensions must be a positive integer string")
+      .optional()
+      .nullable(),
+  })
+  .superRefine(validateQuotaOnlyComboRefs);
 
 export const updateComboDefaultsSchema = z
   .object({

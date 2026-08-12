@@ -783,6 +783,45 @@ test("sanitizeReasoningEffortForProvider: opencode-go DeepSeek V4 Pro preserves 
   }
 });
 
+type EffortCarrierResult = {
+  reasoning_effort?: string;
+  reasoning?: { effort?: string };
+};
+
+test("sanitizeReasoningEffortForProvider: command-code preserves literal max", () => {
+  const body = { reasoning_effort: "max" };
+  const result = sanitizeReasoningEffortForProvider(
+    body,
+    "command-code",
+    "deepseek/deepseek-v4-flash",
+    null
+  ) as EffortCarrierResult;
+  assert.equal(result.reasoning_effort, "max");
+});
+
+test("sanitizeReasoningEffortForProvider: command-code preserves nested literal max", () => {
+  const body = { reasoning: { effort: "max" } };
+  const result = sanitizeReasoningEffortForProvider(
+    body,
+    "command-code",
+    "gpt-5.6-luna",
+    null
+  ) as EffortCarrierResult;
+  assert.equal(result.reasoning?.effort, "max");
+});
+
+test("sanitizeReasoningEffortForProvider: command-code maps normalized xhigh back to max", () => {
+  const body = { reasoning_effort: "xhigh", reasoning: { effort: "xhigh" } };
+  const result = sanitizeReasoningEffortForProvider(
+    body,
+    "command-code",
+    "gpt-5.6-luna",
+    null
+  ) as EffortCarrierResult;
+  assert.equal(result.reasoning_effort, "max");
+  assert.equal(result.reasoning?.effort, "max");
+});
+
 test("sanitizeReasoningEffortForProvider: opencode-go with non-DeepSeek model passes max through (new default)", () => {
   // opencode-go non-DeepSeek models are not explicitly flagged as rejecting max,
   // so max passes through unchanged under the new default.

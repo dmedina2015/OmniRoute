@@ -311,6 +311,8 @@ export function validateProviderSpecificData(
     "ollamaCloudUsageCookie",
     "ollamaCloudCookie",
     "usageCookie",
+    "alibabaConsoleCookie",
+    "alibabaConsoleSecToken",
   ] as const) {
     const value = data[key];
     if (value !== undefined && value !== null && typeof value !== "string") {

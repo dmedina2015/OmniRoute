@@ -294,7 +294,8 @@ export async function validateCopilotWebProvider({ apiKey, providerSpecificData 
     if (!raw) {
       return {
         valid: false,
-        error: "Paste your access_token from copilot.microsoft.com DevTools → Cookies",
+        error:
+          "Paste your access_token from an authenticated copilot.microsoft.com request (DevTools → Network → Authorization)",
       };
     }
 
@@ -326,7 +327,7 @@ export async function validateCopilotWebProvider({ apiKey, providerSpecificData 
       return {
         valid: false,
         error:
-          "Invalid or expired access_token — re-paste from copilot.microsoft.com DevTools → Cookies",
+          "Invalid or expired access_token — capture a fresh Authorization bearer token from copilot.microsoft.com DevTools → Network",
       };
     }
 
@@ -671,6 +672,37 @@ export async function validateInnerAiProvider({ apiKey, providerSpecificData = {
         valid: false,
         error:
           "Token does not look like an Inner.ai session token — re-paste from DevTools → Cookies → .innerai.com",
+      };
+    }
+
+    return { valid: true, error: null };
+  } catch (error: any) {
+    return toValidationErrorResult(error);
+  }
+}
+
+export async function validateTinyCmsWebProvider({ apiKey, providerSpecificData = {} }: any) {
+  try {
+    const raw = typeof apiKey === "string" ? apiKey.trim() : "";
+    if (!raw || !raw.startsWith("R")) {
+      return { valid: false, error: "TinyCMS UUID must start with 'R'" };
+    }
+
+    const response = await validationRead("https://gov.freegpt.win/api/challenge", {
+      headers: applyCustomUserAgent(
+        {
+          uuid: raw,
+          "x-origin": "https://gov.freegpt.win",
+          Accept: "application/json",
+        },
+        providerSpecificData
+      ),
+    });
+
+    if (!response.ok) {
+      return {
+        valid: false,
+        error: `TinyCMS UUID validation status: ${response.status} (invalid/expired UUID)`,
       };
     }
 

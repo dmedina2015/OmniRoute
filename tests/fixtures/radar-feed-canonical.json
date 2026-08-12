@@ -46,7 +46,10 @@
       "setup": {
         "keyUrl": "https://console.groq.com/keys",
         "steps": [
-          "Crie uma conta gratuita no console da Groq",
+          {
+            "en": "Create a free account in the Groq console",
+            "pt": "Crie uma conta gratuita no console da Groq"
+          },
           "Gere uma API key na página de keys",
           "Adicione a key no OmniRoute com o provider groq"
         ]

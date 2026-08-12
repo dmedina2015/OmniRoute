@@ -9,6 +9,7 @@ import {
   addBufferToUsage,
   filterUsageForFormat,
   normalizeUsage as normalizeTokenUsage,
+  sanitizeUsagePayloadForRequest,
 } from "./usageTracking.ts";
 import {
   parseSSELine,
@@ -78,6 +79,7 @@ import {
   restoreOpenAIToolNames,
 } from "../translator/helpers/toolCallHelper.ts";
 import { normalizeFinalOpenAIStreamChunk } from "./openAIStreamChunk.ts";
+import { collectClaudeDelta } from "./streamClaudeDelta.ts";
 
 /**
  * Race a response body read against a timeout.
@@ -1316,7 +1318,10 @@ export function createSSEStream(options: StreamOptions = {}) {
                     parsed.type.startsWith("content_block") ||
                     parsed.type === "ping" ||
                     parsed.type === "error");
-
+                if (sanitizeUsagePayloadForRequest(parsed, body, clientResponseFormat)) {
+                  output = `data: ${JSON.stringify(parsed)}\n\n`;
+                  injectedUsage = true;
+                }
                 if (isResponsesSSE) {
                   // #6199/#6561 — statefully drop internal commentary-phase output (see
                   // ./responsesCommentaryDrop.ts) and clear the buffered `event:` line
@@ -1984,13 +1989,11 @@ export function createSSEStream(options: StreamOptions = {}) {
           }
 
           if (shouldDropResponsesCommentary && dropCommentary(parsed as JsonRecord)) continue;
-
           providerPayloadCollector.push(parsed);
-
           if (parsed && parsed.done) {
             continue;
           }
-
+          sanitizeUsagePayloadForRequest(parsed, body, targetFormat);
           if (parsed.choices?.[0]?.delta?.tool_calls) {
             lastToolCallChunkTime = now;
           }
@@ -2005,18 +2008,8 @@ export function createSSEStream(options: StreamOptions = {}) {
           // Do this before translation so we capture content regardless of translator output shape
 
           // Claude format
-          if (parsed.delta?.text) {
-            const t = parsed.delta.text;
-            totalContentLength += t.length;
-            if (state?.accumulatedContent !== undefined && typeof t === "string")
-              state.accumulatedContent = appendBoundedText(state.accumulatedContent, t);
-          }
-          if (parsed.delta?.thinking) {
-            const t = parsed.delta.thinking;
-            totalContentLength += t.length;
-            if (state?.accumulatedReasoning !== undefined && typeof t === "string")
-              state.accumulatedReasoning = appendBoundedText(state.accumulatedReasoning, t);
-          }
+          const claudeDelta = collectClaudeDelta(parsed.delta, state);
+          totalContentLength += claudeDelta.contentLength;
 
           // OpenAI format
           if (parsed.choices?.[0]?.delta?.content) {
@@ -2098,7 +2091,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           }
 
           const translateHasContent =
-            typeof parsed.delta?.text === "string" ||
+            claudeDelta.hasText ||
             typeof parsed.choices?.[0]?.delta?.content === "string" ||
             Boolean(getAnyReasoningValue(parsed.choices?.[0]?.delta));
           if (translateHasContent && !contentAfterToolSeen) {
@@ -2202,6 +2195,7 @@ export function createSSEStream(options: StreamOptions = {}) {
               },
               pushProviderPayload: (payload: unknown) => providerPayloadCollector.push(payload),
               pushClientPayload: (payload: unknown) => clientPayloadCollector.push(payload),
+              sanitizeUsagePayload: (payload: unknown) => sanitizeUsagePayloadForRequest(payload, body, clientResponseFormat),
               setPassthroughResponsesId: (value: string) => {
                 passthroughResponsesId = value;
               },
@@ -2250,7 +2244,6 @@ export function createSSEStream(options: StreamOptions = {}) {
                 return;
               }
             }
-
             const bufferedLine = buffer.trim();
             if (skipPassthroughEvent || /^event:\s*keepalive\b/i.test(bufferedLine)) {
               skipPassthroughEvent = false;
@@ -2263,6 +2256,7 @@ export function createSSEStream(options: StreamOptions = {}) {
               const bufferedPayload = parseSSELine(bufferedLine);
               if (bufferedPayload) {
                 providerPayloadCollector.push(bufferedPayload);
+                if (sanitizeUsagePayloadForRequest(bufferedPayload, body, clientResponseFormat)) output = `data: ${JSON.stringify(bufferedPayload)}\n\n`;
                 if (
                   shouldInjectClaudeEmptyResponseBeforeCurrentEvent(
                     claudeEmptyResponseLifecycle,
@@ -2276,7 +2270,7 @@ export function createSSEStream(options: StreamOptions = {}) {
                   updateClaudeEmptyResponseLifecycle(claudeEmptyResponseLifecycle, bufferedPayload);
                 }
                 clientPayloadCollector.push(bufferedPayload);
-
+                // Normalize numeric IDs for final buffered data: chunk (same as transform path)
                 if (typeof bufferedPayload === "object" && !Array.isArray(bufferedPayload)) {
                   const flushedParsed = bufferedPayload as JsonRecord;
                   const flushedType =

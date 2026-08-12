@@ -39,6 +39,7 @@ import {
 import {
   validateMuseSparkWebProvider,
   validateAdaptaWebProvider,
+  validateTinyCmsWebProvider,
   validateClaudeWebProvider,
   validateGeminiWebProvider,
   validateCopilotM365WebProvider,
@@ -79,6 +80,7 @@ import {
   validateNousResearchProvider,
   validatePoeProvider,
 } from "./validation/audioMiscProviders";
+import { validateChatGptWebCodexProvider } from "./validation/chatgptWebCodex";
 import { validateSearchProvider, SEARCH_VALIDATOR_CONFIGS } from "./validation/searchProviders";
 import {
   validateClarifaiProvider,
@@ -251,11 +253,13 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     "qwen-web": validateQwenWebProvider,
     "kimi-web": validateKimiWebProvider,
     "chatgpt-web": validateChatGptWebProvider,
+    "chatgpt-web-codex": validateChatGptWebCodexProvider,
     "perplexity-web": validatePerplexityWebProvider,
     "blackbox-web": validateBlackboxWebProvider,
     "muse-spark-web": validateMuseSparkWebProvider,
     "inner-ai": validateInnerAiProvider,
     "adapta-web": validateAdaptaWebProvider,
+    "tinycms-web": validateTinyCmsWebProvider,
     "claude-web": validateClaudeWebProvider,
     "gemini-web": validateGeminiWebProvider,
     "notion-web": validateNotionWebProvider,

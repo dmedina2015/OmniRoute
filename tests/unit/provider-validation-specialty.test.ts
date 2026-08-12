@@ -2574,7 +2574,7 @@ test("copilot-web validator: cookie with access_token= is extracted", async () =
 
   await validateProviderApiKey({
     provider: "copilot-web",
-    apiKey: "access_token=eyJhbGciOiJIUzI1NiJ9.payload.sig; other_cookie=foo",
+    apiKey: `${"padding=value; ".repeat(12)}access_token=eyJhbGciOiJIUzI1NiJ9.payload.sig; other_cookie=foo`,
   });
   assert.equal(capturedAuth, "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig");
 });

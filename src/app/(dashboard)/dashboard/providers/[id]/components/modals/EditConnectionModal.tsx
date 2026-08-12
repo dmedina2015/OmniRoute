@@ -68,6 +68,7 @@ export interface EditConnectionModalConnection {
   provider?: string;
   apiKey?: string;
   providerSpecificData?: Record<string, unknown>;
+  defaultModel?: string | null;
   healthCheckInterval?: number;
   projectId?: string | null;
 }
@@ -114,6 +115,7 @@ export default function EditConnectionModal({
     region: "",
     apiRegion: "international",
     validationModelId: "",
+    defaultModel: "",
     tag: "",
     routingTags: "",
     excludedModels: "",
@@ -141,12 +143,20 @@ export default function EditConnectionModal({
     passthroughModels: connectionProviderSpecificData?.passthroughModels === true,
     disableCooling: connectionProviderSpecificData?.disableCooling === true,
     importFreeModelsOnly: connectionProviderSpecificData?.importFreeModelsOnly === true,
+    tunnelId: stringField(connectionProviderSpecificData?.tunnelId),
+    runtimeKey: "",
+    connectorName: stringField(connectionProviderSpecificData?.connectorName) || "OmniRoute Codex",
     m365Tier: normalizeM365TierValue(connectionProviderSpecificData?.tier) as M365TierValue,
   });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
+  const [validatedProviderSpecificData, setValidatedProviderSpecificData] = useState<
+    Record<string, unknown> | undefined
+  >();
+  const [doctorStatus, setDoctorStatus] = useState<Record<string, any> | null>(null);
+  const [doctorLoading, setDoctorLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [extraApiKeys, setExtraApiKeys] = useState<string[]>([]);
@@ -200,6 +210,7 @@ export default function EditConnectionModal({
   const localProviderMetadata = getLocalProviderMetadata(provider);
   const isLocalSelfHostedProvider = !!localProviderMetadata;
   const isGooglePse = provider === "google-pse-search";
+  const isChatGptWebCodex = provider === "chatgpt-web-codex";
   const isM365TierCapable = isM365TierCapableProvider(provider);
   const webSessionCredential = getWebSessionCredentialRequirement(provider);
   const isNoAuthWebSessionCredential = webSessionCredential?.kind === "none";
@@ -308,6 +319,7 @@ export default function EditConnectionModal({
         region: existingRegion || (showsRegion ? defaultRegion : ""),
         apiRegion: (connection.providerSpecificData?.apiRegion as string) || "international",
         validationModelId: (connection.providerSpecificData?.validationModelId as string) || "",
+        defaultModel: (connection.defaultModel as string) || "",
         tag: (connection.providerSpecificData?.tag as string) || "",
         routingTags: formatRoutingTagsInput(connection.providerSpecificData?.tags),
         excludedModels: formatExcludedModelsInput(
@@ -345,6 +357,10 @@ export default function EditConnectionModal({
         passthroughModels: connection?.providerSpecificData?.passthroughModels === true,
         disableCooling: connection?.providerSpecificData?.disableCooling === true,
         importFreeModelsOnly: connection?.providerSpecificData?.importFreeModelsOnly === true,
+        tunnelId: stringField(connection.providerSpecificData?.tunnelId),
+        runtimeKey: "",
+        connectorName:
+          stringField(connection.providerSpecificData?.connectorName) || "OmniRoute Codex",
         m365Tier: normalizeM365TierValue(connection.providerSpecificData?.tier) as M365TierValue,
       });
       const existing = connection.providerSpecificData?.extraApiKeys;
@@ -370,6 +386,7 @@ export default function EditConnectionModal({
       );
       setTestResult(null);
       setValidationResult(null);
+      setValidatedProviderSpecificData(undefined);
       setSaveError(null);
     }
   }, [
@@ -431,10 +448,20 @@ export default function EditConnectionModal({
           baseUrl: formData.baseUrl.trim() || undefined,
           region: showsRegion ? formData.region.trim() || defaultRegion : undefined,
           cx: formData.cx.trim() || undefined,
+          runtimeKey: isChatGptWebCodex ? formData.runtimeKey.trim() || undefined : undefined,
+          tunnelId: isChatGptWebCodex ? formData.tunnelId.trim() || undefined : undefined,
+          connectorName: isChatGptWebCodex ? formData.connectorName.trim() || undefined : undefined,
         }),
       });
       const data = await res.json();
       setValidationResult(data.valid ? "success" : "failed");
+      if (
+        data.valid &&
+        data.providerSpecificData &&
+        typeof data.providerSpecificData === "object"
+      ) {
+        setValidatedProviderSpecificData(data.providerSpecificData);
+      }
     } catch {
       setValidationResult("failed");
     } finally {
@@ -503,7 +530,7 @@ export default function EditConnectionModal({
         }
       }
       if (!isOAuth && formData.apiKey) {
-        updates.apiKey = formData.apiKey;
+        let validationPsd = validatedProviderSpecificData;
         let isValid = validationResult === "success";
         if (!isValid) {
           try {
@@ -520,11 +547,24 @@ export default function EditConnectionModal({
                 baseUrl: formData.baseUrl.trim() || undefined,
                 region: showsRegion ? formData.region.trim() || defaultRegion : undefined,
                 cx: formData.cx.trim() || undefined,
+                runtimeKey: isChatGptWebCodex ? formData.runtimeKey.trim() || undefined : undefined,
+                tunnelId: isChatGptWebCodex ? formData.tunnelId.trim() || undefined : undefined,
+                connectorName: isChatGptWebCodex
+                  ? formData.connectorName.trim() || undefined
+                  : undefined,
               }),
             });
             const data = await res.json();
             isValid = !!data.valid;
             setValidationResult(isValid ? "success" : "failed");
+            if (
+              isValid &&
+              data.providerSpecificData &&
+              typeof data.providerSpecificData === "object"
+            ) {
+              setValidatedProviderSpecificData(data.providerSpecificData);
+              validationPsd = data.providerSpecificData;
+            }
           } catch {
             setValidationResult("failed");
           } finally {
@@ -532,6 +572,13 @@ export default function EditConnectionModal({
           }
         }
         if (isValid) {
+          updates.apiKey = isChatGptWebCodex
+            ? JSON.stringify({
+                version: 1,
+                cookie: formData.apiKey.trim().replace(/^cookie\s*:\s*/i, ""),
+                ...(formData.runtimeKey.trim() ? { runtimeKey: formData.runtimeKey.trim() } : {}),
+              })
+            : formData.apiKey;
           updates.testStatus = "active";
           updates.lastError = null;
           updates.lastErrorAt = null;
@@ -542,8 +589,12 @@ export default function EditConnectionModal({
         }
       }
       if (!isOAuth) {
+        if (isCompatible) {
+          updates.defaultModel = formData.defaultModel.trim() || null;
+        }
         updates.providerSpecificData = {
           ...(connection.providerSpecificData || {}),
+          ...(validationPsd || {}),
         };
         assignEditApiKeyProviderSpecificData({
           provider,
@@ -887,6 +938,83 @@ export default function EditConnectionModal({
                 </div>
               </div>
             )}
+            {isChatGptWebCodex && (
+              <div className="space-y-3 rounded-lg border border-border bg-surface/40 p-3">
+                <p className="text-sm font-medium text-text-main">Codex-Toolverbindung</p>
+                <Input
+                  label="Tunnel-ID"
+                  value={formData.tunnelId}
+                  onChange={(event) => setFormData({ ...formData, tunnelId: event.target.value })}
+                  placeholder="tunnel_0123456789abcdef0123456789abcdef"
+                />
+                <Input
+                  label="Neuer Tunnel Runtime-Key"
+                  type="password"
+                  value={formData.runtimeKey}
+                  onChange={(event) => setFormData({ ...formData, runtimeKey: event.target.value })}
+                  hint="Nur zusammen mit einem frischen Cookie eingeben. Der Wert wird verschlüsselt gespeichert."
+                  autoComplete="off"
+                />
+                <Input
+                  label="ChatGPT-Custom-Connector"
+                  value={formData.connectorName}
+                  onChange={(event) =>
+                    setFormData({ ...formData, connectorName: event.target.value })
+                  }
+                />
+                <Button
+                  variant="secondary"
+                  disabled={doctorLoading || !connection.id}
+                  onClick={async () => {
+                    if (!connection.id) return;
+                    setDoctorLoading(true);
+                    try {
+                      const response = await fetch(
+                        `/api/providers/${connection.id}/chatgpt-web-codex-doctor`
+                      );
+                      const payload = await response.json();
+                      setDoctorStatus(response.ok ? payload.status : { error: payload.error });
+                    } finally {
+                      setDoctorLoading(false);
+                    }
+                  }}
+                >
+                  {doctorLoading ? "Status wird geprüft …" : "Doctor-Status prüfen"}
+                </Button>
+                {doctorStatus && (
+                  <div className="grid grid-cols-2 gap-2 text-xs text-text-muted">
+                    {[
+                      ["Browser", doctorStatus.browser?.ready],
+                      ["Storage-State", doctorStatus.storageState?.ready],
+                      ["ChatGPT-Anmeldung", doctorStatus.login?.ready],
+                      ["Temporary Chat", doctorStatus.temporaryChats?.ready],
+                      ["Tunnel-Binary", doctorStatus.tunnelBinary?.ready],
+                      ["Tunnel", doctorStatus.tunnel?.ready],
+                      ["Connector", doctorStatus.connector?.ready],
+                      ["Tool-Roundtrip", doctorStatus.toolRoundtrip?.ready],
+                      ["Aktive Turns", doctorStatus.runtime?.activeTurns],
+                      ["Wartende Turns", doctorStatus.runtime?.waitingTurns],
+                    ].map(([label, ready]) => (
+                      <div key={String(label)}>
+                        {label}:{" "}
+                        {typeof ready === "number" ? ready : ready ? "bereit" : "nicht bereit"}
+                      </div>
+                    ))}
+                    {doctorStatus.recovery?.interactiveLoginRequired && (
+                      <div className="col-span-2 text-warning">
+                        Interaktive Anmeldung erforderlich. Nutze den geschützten
+                        Browser-/VNC-Recovery-Pfad.
+                      </div>
+                    )}
+                    {doctorStatus.lastError && (
+                      <div className="col-span-2 break-words text-danger">
+                        Letzter Fehler: {String(doctorStatus.lastError)}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {isGooglePse && (
               <Input
                 label={t("searchEngineIdLabel")}
@@ -1022,6 +1150,20 @@ export default function EditConnectionModal({
                   </div>
                 </div>
               </div>
+            )}
+            {isCompatible && (
+              <Input
+                label={t("compatibleDefaultModelLabel")}
+                value={formData.defaultModel}
+                onChange={(e) => setFormData({ ...formData, defaultModel: e.target.value })}
+                placeholder={
+                  isAnthropicCompatibleProvider(provider)
+                    ? "claude-3-5-sonnet-latest"
+                    : "gpt-4o-mini"
+                }
+                hint={t("compatibleDefaultModelHint")}
+                data-testid="compat-default-model-input"
+              />
             )}
             <Input
               label={t("validationModelIdLabel")}

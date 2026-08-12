@@ -65,6 +65,7 @@ export async function PATCH(request, { params }) {
     }
     const {
       name,
+      modelAccessMode,
       allowedModels,
       blockedModels,
       allowedCombos,
@@ -81,6 +82,8 @@ export async function PATCH(request, { params }) {
       scopes,
       allowedEndpoints,
       streamDefaultMode,
+      compressionEnabled,
+      cacheDefaultMode,
       disableNonPublicModels,
       allowUsageCommand,
       usageLimitEnabled,
@@ -91,6 +94,7 @@ export async function PATCH(request, { params }) {
 
     const payload: Parameters<typeof updateApiKeyPermissions>[1] = {};
     if (name !== undefined) payload.name = name;
+    if (modelAccessMode !== undefined) payload.modelAccessMode = modelAccessMode;
     if (allowedModels !== undefined) payload.allowedModels = allowedModels;
     if (blockedModels !== undefined) payload.blockedModels = blockedModels;
     if (allowedCombos !== undefined) payload.allowedCombos = allowedCombos;
@@ -107,6 +111,8 @@ export async function PATCH(request, { params }) {
     if (scopes !== undefined) payload.scopes = scopes;
     if (allowedEndpoints !== undefined) payload.allowedEndpoints = allowedEndpoints;
     if (streamDefaultMode !== undefined) payload.streamDefaultMode = streamDefaultMode;
+    if (compressionEnabled !== undefined) payload.compressionEnabled = compressionEnabled;
+    if (cacheDefaultMode !== undefined) payload.cacheDefaultMode = cacheDefaultMode;
     if (disableNonPublicModels !== undefined)
       payload.disableNonPublicModels = disableNonPublicModels;
     if (allowUsageCommand !== undefined) payload.allowUsageCommand = allowUsageCommand;
@@ -126,6 +132,7 @@ export async function PATCH(request, { params }) {
     return NextResponse.json({
       message: "API key settings updated successfully",
       ...(name !== undefined && { name }),
+      ...(modelAccessMode !== undefined && { modelAccessMode }),
       ...(allowedModels !== undefined && { allowedModels }),
       ...(blockedModels !== undefined && { blockedModels }),
       ...(allowedCombos !== undefined && { allowedCombos }),
@@ -142,6 +149,8 @@ export async function PATCH(request, { params }) {
       ...(scopes !== undefined && { scopes }),
       ...(allowedEndpoints !== undefined && { allowedEndpoints }),
       ...(streamDefaultMode !== undefined && { streamDefaultMode }),
+      ...(compressionEnabled !== undefined && { compressionEnabled }),
+      ...(cacheDefaultMode !== undefined && { cacheDefaultMode }),
       ...(disableNonPublicModels !== undefined && { disableNonPublicModels }),
       ...(allowUsageCommand !== undefined && { allowUsageCommand }),
       ...(usageLimitEnabled !== undefined && { usageLimitEnabled }),

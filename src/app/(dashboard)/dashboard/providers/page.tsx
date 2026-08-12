@@ -134,22 +134,28 @@ type ProviderBatchTestResults = {
   error?: string | { message?: string };
 };
 
-function getConnectionErrorTag(connection) {
+function getConnectionErrorTag(connection, t: ProviderMessageTranslator) {
   if (!connection) return null;
 
   const explicitType = connection.lastErrorType;
-  if (explicitType === "runtime_error") return "Runtime";
+  if (explicitType === "runtime_error") return providerText(t, "errorTypeRuntime", "Runtime");
   if (
     explicitType === "upstream_auth_error" ||
     explicitType === "auth_missing" ||
     explicitType === "token_refresh_failed" ||
     explicitType === "token_expired"
   ) {
-    return "Auth";
+    return providerText(t, "errorTypeUpstreamAuth", "Auth");
   }
-  if (explicitType === "upstream_rate_limited") return "Rate limited";
-  if (explicitType === "upstream_unavailable") return "Server error";
-  if (explicitType === "network_error") return "Network";
+  if (explicitType === "upstream_rate_limited") {
+    return providerText(t, "errorTypeRateLimited", "Rate limited");
+  }
+  if (explicitType === "upstream_unavailable") {
+    return providerText(t, "errorTypeUpstreamUnavailable", "Server error");
+  }
+  if (explicitType === "network_error") {
+    return providerText(t, "errorTypeNetworkError", "Network");
+  }
 
   const numericCode = Number(connection.errorCode);
   if (Number.isFinite(numericCode) && numericCode >= 400) {
@@ -157,19 +163,21 @@ function getConnectionErrorTag(connection) {
   }
 
   const fromMessage = getErrorCode(connection.lastError);
-  if (fromMessage === "401" || fromMessage === "403") return "Auth";
+  if (fromMessage === "401" || fromMessage === "403") {
+    return providerText(t, "errorTypeUpstreamAuth", "Auth");
+  }
   if (fromMessage && fromMessage !== "ERR") return fromMessage;
 
   const msg = (connection.lastError || "").toLowerCase();
   if (msg.includes("runtime") || msg.includes("not runnable") || msg.includes("not installed"))
-    return "Runtime";
+    return providerText(t, "errorTypeRuntime", "Runtime");
   if (
     msg.includes("invalid api key") ||
     msg.includes("token invalid") ||
     msg.includes("revoked") ||
     msg.includes("unauthorized")
   )
-    return "Auth";
+    return providerText(t, "errorTypeUpstreamAuth", "Auth");
 
   return "ERR";
 }
@@ -355,7 +363,7 @@ export default function ProvidersPage() {
       (a: any, b: any) =>
         (new Date(b.lastErrorAt || 0) as any) - (new Date(a.lastErrorAt || 0) as any)
     )[0];
-    const errorCode = latestError ? getConnectionErrorTag(latestError) : null;
+    const errorCode = latestError ? getConnectionErrorTag(latestError, t) : null;
     const errorTime = latestError?.lastErrorAt ? getRelativeTime(latestError.lastErrorAt) : null;
 
     // Check expirations

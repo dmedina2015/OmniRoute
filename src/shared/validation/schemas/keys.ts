@@ -82,6 +82,7 @@ export const setTokenLimitSchema = z
 export const updateKeyPermissionsSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
+    modelAccessMode: z.enum(["all", "restricted"]).optional(),
     allowedModels: z.array(z.string().trim().min(1)).max(1000).optional(),
     allowedCombos: z.array(z.string().trim().min(1).max(200)).max(500).optional(),
     allowedConnections: z.array(z.string().uuid()).max(100).optional(),
@@ -106,6 +107,8 @@ export const updateKeyPermissionsSchema = z
     scopes: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
     allowedEndpoints: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
     streamDefaultMode: z.enum(["legacy", "json"]).optional(),
+    compressionEnabled: z.boolean().optional(),
+    cacheDefaultMode: z.enum(["legacy", "bypass"]).optional(),
     disableNonPublicModels: z.boolean().optional(),
     allowUsageCommand: z.boolean().optional(),
     usageLimitEnabled: z.boolean().optional(),
@@ -114,8 +117,16 @@ export const updateKeyPermissionsSchema = z
     chaosModeEnabled: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
+    if (value.modelAccessMode === "all" && value.allowedModels && value.allowedModels.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "allowedModels must be empty when modelAccessMode is 'all'",
+        path: ["allowedModels"],
+      });
+    }
     if (
       value.name === undefined &&
+      value.modelAccessMode === undefined &&
       value.allowedModels === undefined &&
       value.allowedCombos === undefined &&
       value.allowedConnections === undefined &&
@@ -131,6 +142,8 @@ export const updateKeyPermissionsSchema = z
       value.scopes === undefined &&
       value.allowedEndpoints === undefined &&
       value.streamDefaultMode === undefined &&
+      value.compressionEnabled === undefined &&
+      value.cacheDefaultMode === undefined &&
       value.disableNonPublicModels === undefined &&
       value.allowUsageCommand === undefined &&
       value.usageLimitEnabled === undefined &&

@@ -241,8 +241,7 @@ export class OpencodeExecutor extends BaseExecutor {
     if (isKeyless && isPremiumOpencodeModel(input.model, this.provider)) {
       const bodyJson = JSON.stringify({
         error: {
-          message:
-            "This model requires an opencode API key — add one in Settings → Providers.",
+          message: "This model requires an opencode API key — add one in Settings → Providers.",
           type: "invalid_request_error",
           code: "premium_model_requires_key",
         },
@@ -399,6 +398,77 @@ export class OpencodeExecutor extends BaseExecutor {
     return headers;
   }
 
+  /**
+   * OpenCode's free DeepSeek V4 Flash endpoint accepts json_object but
+   * rejects json_schema response_format with HTTP 400. Preserve the schema
+   * as an instruction and downgrade only this proven-incompatible route to
+   * json_object so callers still receive structured JSON.
+   */
+  private applyDeepSeekJsonSchemaFallback<T>(model: string, body: T): T {
+    if (
+      model !== "deepseek-v4-flash-free" ||
+      (this.provider !== "opencode" && this.provider !== "opencode-zen")
+    ) {
+      return body;
+    }
+
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return body;
+    }
+
+    const record = body as Record<string, unknown>;
+    const responseFormat = record.response_format as
+      | {
+          type?: string;
+          json_schema?: {
+            schema?: unknown;
+          };
+        }
+      | undefined;
+
+    if (responseFormat?.type !== "json_schema" || !responseFormat.json_schema?.schema) {
+      return body;
+    }
+
+    const schemaJson = JSON.stringify(responseFormat.json_schema.schema, null, 2);
+
+    const prompt =
+      "You must respond with valid JSON that strictly follows " +
+      "this JSON schema:\\n```json\\n" +
+      schemaJson +
+      "\\n```\\nRespond ONLY with the JSON object, no other text.";
+
+    const messages: Array<Record<string, unknown>> = Array.isArray(record.messages)
+      ? (record.messages as Array<Record<string, unknown>>).map((message) => ({ ...message }))
+      : [];
+
+    const systemMessage = messages.find((message) => message.role === "system");
+
+    if (systemMessage) {
+      if (typeof systemMessage.content === "string") {
+        systemMessage.content = `${systemMessage.content}\\n\\n${prompt}`;
+      } else if (Array.isArray(systemMessage.content)) {
+        systemMessage.content.push({
+          type: "text",
+          text: `\\n\\n${prompt}`,
+        });
+      }
+    } else {
+      messages.unshift({
+        role: "system",
+        content: prompt,
+      });
+    }
+
+    return {
+      ...record,
+      messages,
+      response_format: {
+        type: "json_object",
+      },
+    } as T;
+  }
+
   transformRequest(
     model: string,
     body: any,
@@ -406,6 +476,7 @@ export class OpencodeExecutor extends BaseExecutor {
     credentials: ProviderCredentials
   ): any {
     let modifiedBody = super.transformRequest(model, body, stream, credentials);
+    modifiedBody = this.applyDeepSeekJsonSchemaFallback(model, modifiedBody);
     // 9router#1442: OpenCode upstreams (e.g. kimi-k2.6 via opencode-go) return
     // 400 "Extra inputs are not permitted, field: 'client_metadata'" — an
     // OpenAI-Codex/Claude-CLI passthrough field with no equivalent here. The

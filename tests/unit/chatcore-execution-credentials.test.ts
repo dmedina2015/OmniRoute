@@ -6,7 +6,10 @@
 // session-id threading.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveExecutionCredentials } from "../../open-sse/handlers/chatCore/executionCredentials.ts";
+import {
+  getExecutionConnectionId,
+  resolveExecutionCredentials,
+} from "../../open-sse/handlers/chatCore/executionCredentials.ts";
 
 const RESPONSES = "openai-responses";
 
@@ -143,6 +146,13 @@ test("missing providerSpecificData defaults to an empty object", () => {
     credentials: { connectionId: "c1" },
   }) as Record<string, unknown>;
   assert.deepEqual(out.providerSpecificData, {});
+  assert.equal(out.connectionId, "c1");
+});
+
+test("getExecutionConnectionId validates and trims the execution credential id", () => {
+  assert.equal(getExecutionConnectionId({ connectionId: "  c1  " }), "c1");
+  assert.equal(getExecutionConnectionId({ connectionId: 42 }), null);
+  assert.equal(getExecutionConnectionId(null), null);
 });
 
 test("Kimi execution credentials carry the discovered protocol and thinking policy", () => {

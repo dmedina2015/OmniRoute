@@ -97,3 +97,25 @@ test("handleVideoGeneration rejects Fal video requests without credentials", asy
   assert.equal(result.status, 401);
   assert.match(result.error, /Fal API key is required/);
 });
+
+test("handleVideoGeneration rejects malformed Fal video URL payloads", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => jsonResponse({ video: { url: { nested: "not-a-url" } } });
+
+  try {
+    const result = await handleVideoGeneration({
+      body: {
+        model: "fal-ai/xai/grok-imagine-video/text-to-video",
+        prompt: "a malformed result",
+      },
+      credentials: { apiKey: "fal-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 502);
+    assert.match(result.error, /no video URL/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

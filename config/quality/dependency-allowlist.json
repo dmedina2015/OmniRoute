@@ -125,6 +125,8 @@
     "tailwind-merge",
     "tailwindcss",
     "tls-client-node",
+    "turndown",
+    "turndown-plugin-gfm",
     "tsup",
     "tsx",
     "type-coverage",

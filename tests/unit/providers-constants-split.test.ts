@@ -17,7 +17,8 @@
 // sarvam+plamo in regional) to 193, then #8170 (inception/typhoon — inception in frontier-labs,
 // typhoon in regional) to 195, then Firecrawl dual search+fetch under SEARCH_PROVIDERS.firecrawl
 // (removed specialty-media duplicate) to 194, #8861 (Xiaomi MiMo Token Plan, regional) to 195, and
-// the Cheaper Inference gateway (OSS-sponsor reseller, gateways family) to 198 (UnoRouter #9009, Raycast Pro #8895).
+// the Cheaper Inference gateway (OSS-sponsor reseller, gateways family) to 198 (UnoRouter #9009,
+// Raycast Pro #8895), then later additions to 199; retiring GitHub Models brings it to 198.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -46,12 +47,12 @@ test("barrel still exports every catalog + key helpers", () => {
   }
 });
 
-test("APIKEY_PROVIDERS merges the 6 family files into 199 entries (no loss / no dup)", async () => {
+test("APIKEY_PROVIDERS merges the 6 family files into 198 entries (no loss / no dup)", async () => {
   const keys = Object.keys((P as Record<string, object>).APIKEY_PROVIDERS);
-  assert.equal(keys.length, 199);
-  assert.equal(new Set(keys).size, 199, "duplicate keys after spread-merge");
+  assert.equal(keys.length, 198);
+  assert.equal(new Set(keys).size, 198, "duplicate keys after spread-merge");
   // the merged object's entry-count equals the sum of the 6 semantic family files; families are a
-  // strict partition (every provider in exactly one), so the sum must be exactly 199.
+  // strict partition (every provider in exactly one), so the sum must be exactly 198.
   const families: [string, string][] = [
     ["gateways", "APIKEY_PROVIDERS_GATEWAYS"],
     ["frontier-labs", "APIKEY_PROVIDERS_FRONTIER"],
@@ -71,7 +72,7 @@ test("APIKEY_PROVIDERS merges the 6 family files into 199 entries (no loss / no 
       seen.add(k);
     }
   }
-  assert.equal(famTotal, 199, "families must partition all 199 providers");
+  assert.equal(famTotal, 198, "families must partition all 198 providers");
 });
 
 test("AI_PROVIDERS Proxy aggregates all sections; lookups resolve", () => {

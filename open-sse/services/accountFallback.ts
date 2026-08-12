@@ -31,6 +31,7 @@ import {
   looksLikeQuotaExhausted,
   type FailureKind,
 } from "../../src/shared/utils/classify429";
+import { recordProviderSuccess as resetCooldownFailureCount } from "./providerCooldownTracker.ts";
 import { resolveProviderId } from "../../src/shared/constants/providers";
 import { resolveUseUpstream429BreakerHints } from "../../src/shared/utils/providerHints";
 import { getCodexModelScope } from "../config/codexQuotaScopes.ts";
@@ -124,6 +125,15 @@ const PROVIDER_FAILURE_ERROR_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const CONNECTION_FAILURE_DEDUP_MS = 5000;
 const MAX_CONNECTION_FAILURE_DEDUP_ENTRIES = 10_000;
 const lastConnectionFailure = new Map<string, number>();
+
+// Per-provider network-error dedup: several combo targets on the SAME provider can
+// fail the same single network event (a VPN blip) in the same request. Without this,
+// each target counts once and one transient blip opens the whole-provider breaker
+// while the provider is healthy. A genuinely dead proxy persists ACROSS requests
+// (past the window) and still accumulates to its threshold.
+const NETWORK_ERROR_DEDUP_MS = 10_000;
+const MAX_NETWORK_ERROR_DEDUP_ENTRIES = 1000;
+const lastNetworkErrorByProvider = new Map<string, number>();
 
 function pruneConnectionFailureDedupeEntries(): void {
   while (lastConnectionFailure.size > MAX_CONNECTION_FAILURE_DEDUP_ENTRIES) {
@@ -732,6 +742,7 @@ export function hasPerModelQuota(
   if (getCanonicalLockProvider(provider) === "antigravity") return true;
   if (getCanonicalLockProvider(provider) === "codex") return true;
   if (provider === "gemini" || provider === "github") return true;
+  if (provider === "antigravity" || provider === "agy") return true;
   if (getPassthroughProviders().has(provider)) return true;
   if (isCompatibleProvider(provider)) return true;
   return false;
@@ -972,9 +983,30 @@ export function recordProviderFailure(
   provider: string | null | undefined,
   log?: { warn?: (...args: unknown[]) => void },
   connectionId?: string | null,
-  profile?: ProviderBreakerProfile | null
+  profile?: ProviderBreakerProfile | null,
+  opts?: { isQueueTimeout?: boolean; isNetworkError?: boolean }
 ): void {
   if (!provider) return;
+  // OmniRoute's own rate-limit queue timeout is backpressure we applied, not a
+  // provider failure — the provider never saw the request, so it must not count
+  // toward the provider breaker.
+  if (opts?.isQueueTimeout) return;
+
+  // Network-layer errors (proxy_unreachable) get a separate SAME-PROVIDER dedup, so a
+  // single transient network event is not counted once per combo target (see the
+  // declaration). A dead proxy persists across requests and still accumulates.
+  if (opts?.isNetworkError) {
+    const now = Date.now();
+    const last = lastNetworkErrorByProvider.get(provider);
+    if (last && now - last < NETWORK_ERROR_DEDUP_MS) return;
+    lastNetworkErrorByProvider.delete(provider);
+    lastNetworkErrorByProvider.set(provider, now);
+    while (lastNetworkErrorByProvider.size > MAX_NETWORK_ERROR_DEDUP_ENTRIES) {
+      const oldestKey = lastNetworkErrorByProvider.keys().next().value;
+      if (typeof oldestKey !== "string") break;
+      lastNetworkErrorByProvider.delete(oldestKey);
+    }
+  }
 
   // Deduplicate rapid-fire failures from the same connection
   if (connectionId) {
@@ -999,6 +1031,47 @@ export function recordProviderFailure(
   if (!breaker.canExecute()) {
     log?.warn?.(`[ProviderFailure] ${provider}: circuit breaker opened after repeated failures`);
   }
+}
+
+/**
+ * Record a successful request for a provider.
+ * Symmetric counterpart of recordProviderFailure:
+ * - Resets cooldown failureCount (exponential backoff) for all non-OPEN states.
+ * - HALF_OPEN -> CLOSED (probe success), CLOSED/DEGRADED -> decay failureCount.
+ *
+ * When the breaker is OPEN (provider is failing), this is a no-op -- the
+ * cooldown stays intact and the breaker keeps its cooldown period.
+ *
+ * Matches execute()'s behavior: _onSuccess() is called for all non-OPEN states.
+ */
+export function recordProviderSuccess(
+  provider: string | null | undefined,
+  connectionId?: string | null
+): void {
+  if (!provider || provider === "unknown") return;
+
+  const breaker = getProviderBreaker(provider);
+  if (!breaker) return;
+  const breakerState = breaker.getStatus().state;
+
+  // When breaker is OPEN, the provider is failing -- do not reset cooldown
+  // even if one request slipped through (dispatched before the open).
+  // The cooldown resets when the breaker reaches HALF_OPEN and the probe
+  // succeeds below.
+  if (breakerState === "OPEN") return;
+
+  // Reset cooldown failureCount (exponential backoff) -- symmetric with
+  // recordProviderCooldown which increments it on each failure.
+  resetCooldownFailureCount(provider, connectionId ?? undefined);
+
+  // Clear failure-dedup window so the next genuine failure is not suppressed.
+  if (connectionId) {
+    lastConnectionFailure.delete(`${provider}:${connectionId}`);
+  }
+
+  // Transition breaker on success, matching execute()'s behavior:
+  // HALF_OPEN -> CLOSED (probe success), CLOSED/DEGRADED -> decay failureCount.
+  breaker._onSuccess();
 }
 
 /**

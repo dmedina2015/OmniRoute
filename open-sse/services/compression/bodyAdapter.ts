@@ -373,9 +373,9 @@ export function adaptBodyForCompression(
       }
 
       // Compaction restore (#8560): rebuild input so Layer-3 history drops actually shrink
-      // Responses payloads. Also drop orphan function_call items whose outputs vanished.
+      // Responses payloads. Also drop orphan regular/custom call items whose outputs vanished.
       const nextInput: unknown[] = [];
-      const survivingCallIds = new Set<string>();
+      const survivingOutputKeys = new Set<string>();
       inputItems.forEach((item, index) => {
         if (mappedIndexSet.has(index)) {
           const compressedMessage = compressedMessagesByIndex.get(index);
@@ -392,7 +392,7 @@ export function adaptBodyForCompression(
               restored.type === "apply_patch_call_output") &&
             typeof restored.call_id === "string"
           ) {
-            survivingCallIds.add(restored.call_id);
+            survivingOutputKeys.add(`${restored.type}:${restored.call_id}`);
           }
           return;
         }
@@ -422,7 +422,9 @@ export function adaptBodyForCompression(
           );
         });
         if (!hadMappedOutput) return true;
-        return survivingCallIds.has(item.call_id);
+        const outputType =
+          item.type === "custom_tool_call" ? "custom_tool_call_output" : "function_call_output";
+        return survivingOutputKeys.has(`${outputType}:${item.call_id}`);
       });
 
       const rest = { ...compressedBody };

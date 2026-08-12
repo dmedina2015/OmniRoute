@@ -24,6 +24,10 @@ import { resolveComboRuntimeUnits, resolveComboTargets } from "./comboStructure.
 import { isComboModelVisible } from "./comboVisibility.ts";
 import { buildFusionHandleSingleModel, extractFusionPanelSpec } from "./fusionPanel.ts";
 import {
+  expandComboSystemPromptIfPresent,
+  resolveTargetFingerprint,
+} from "../comboAgentMiddleware.ts";
+import {
   clampStickyWeightedTargetLimit,
   getStickyRoundRobinStartIndex,
   getStickyWeightedExecutionKey,
@@ -71,6 +75,7 @@ type PreludeBaseOptionArgs = {
   signal?: AbortSignal | null;
   apiKeyAllowedConnections?: string[] | null;
   hiddenModelsByProvider?: HiddenModelsByProvider;
+  clientManagedResponsesContext?: boolean;
 };
 
 /** Rebuild handleComboChat's option bag verbatim for a recursive dispatch. */
@@ -87,6 +92,7 @@ function buildBaseOptions(a: PreludeBaseOptionArgs): HandleComboChatOptions {
     signal: a.signal,
     apiKeyAllowedConnections: a.apiKeyAllowedConnections,
     hiddenModelsByProvider: a.hiddenModelsByProvider,
+    clientManagedResponsesContext: a.clientManagedResponsesContext,
   };
 }
 
@@ -260,12 +266,20 @@ export async function tryPinnedModelDispatch(args: {
   // when allCombos is authoritative (non-empty) so we can resolve combo-refs;
   // the auto-combo redirect path passes an empty list and keeps prior behavior.
   const haveFullCombos = Array.isArray(allCombos) ? allCombos.length > 0 : !!allCombos;
-  const pinInCombo = resolveComboTargets(
+  // Eagerly resolve the combo's targets once (used for the pin-validity check AND
+  // #5501 template expansion). A non-authoritative allCombos (empty/missing)
+  // resolves to the combo's direct targets only — same semantics as the original
+  // `!haveFullCombos ||` short-circuit, without feeding `[]` to the nested resolver.
+  // #5501 also needs these targets eagerly for the combo system_message expansion;
+  // the release refactor threads `hiddenModelsByProvider` through the resolver so
+  // hidden models stay filtered on both the pin-validity and expansion paths.
+  const comboTargets = resolveComboTargets(
     combo,
-    haveFullCombos ? allCombos : null,
+    haveFullCombos ? allCombos : undefined,
     clampComboDepth(config.maxComboDepth),
     hiddenModelsByProvider
-  ).some((target) => target.modelStr === pinnedModel);
+  );
+  const pinInCombo = !haveFullCombos || comboTargets.some((t) => t.modelStr === pinnedModel);
   // Honor the pin only if it is still a combo target AND its provider is not
   // DURABLY down. Without the health gate a pin keeps routing a session to a
   // dead/credits-exhausted/throttled account forever (strategy bypassed, no
@@ -280,7 +294,21 @@ export async function tryPinnedModelDispatch(args: {
     );
     let pinnedResult: Response | null = null;
     try {
-      pinnedResult = await handleSingleModelWithTimeout(body, pinnedModel, {
+      // #5501: the combo system_message also expands on the pinned context path —
+      // a session pin bypasses the main loop, so without this the template would
+      // go literal from the second in-session request on. Target context comes
+      // from the pinned model's resolved combo target when available.
+      const pinnedTarget = comboTargets.find((t) => t.modelStr === pinnedModel);
+      const pinnedBody = expandComboSystemPromptIfPresent(body, combo, {
+        modelId: pinnedModel,
+        providerId: pinnedTarget && pinnedTarget.provider !== "unknown" ? pinnedTarget.provider : "",
+        account:
+          typeof pinnedTarget?.label === "string" && pinnedTarget.label.trim().length > 0
+            ? pinnedTarget.label.trim()
+            : "",
+        fingerprint: pinnedTarget ? resolveTargetFingerprint(pinnedTarget) ?? "" : "",
+      });
+      pinnedResult = await handleSingleModelWithTimeout(pinnedBody, pinnedModel, {
         modelPinned: true,
       } as SingleModelTarget);
     } catch (pinErr) {

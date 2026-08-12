@@ -25,12 +25,26 @@ export type WebSessionCredentialRequirement =
     };
 
 export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
+  "chatgpt-web-codex": {
+    kind: "cookie",
+    credentialName: "ChatGPT Cookie header (full)",
+    placeholder: "__Secure-next-auth.session-token=...; cf_clearance=...",
+    acceptsFullCookieHeader: true,
+    storageKeys: ["cookie", "sessionToken", "session-token", "__Secure-next-auth.session-token"],
+  },
   "zenmux-free": {
     kind: "cookie",
     credentialName: "Cookie header (full)",
     placeholder: "paste the full Cookie header from zenmux.ai",
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie"],
+  },
+  "tinycms-web": {
+    kind: "token",
+    credentialName: "app-config-uuid",
+    placeholder: "R...",
+    acceptsFullCookieHeader: false,
+    storageKeys: ["apiKey", "token", "uuid", "app-config-uuid"],
   },
   "chatgpt-web": {
     kind: "cookie",
@@ -317,6 +331,14 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
       "Paste eyJ… JWT from Authorization: Bearer on firefly-3p generate request (not page Cookie alone)",
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie", "token", "access_token", "accessToken"],
+  },
+  "conol-web": {
+    kind: "cookie",
+    credentialName: "__Secure-better-auth.session_token",
+    placeholder:
+      "__Secure-better-auth.session_token=... or full Cookie header from conol.ai",
+    acceptsFullCookieHeader: true,
+    storageKeys: ["cookie", "__Secure-better-auth.session_token"],
   },
 } satisfies Record<string, WebSessionCredentialRequirement> &
   Record<keyof typeof WEB_COOKIE_PROVIDERS, WebSessionCredentialRequirement>;

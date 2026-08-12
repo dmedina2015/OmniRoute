@@ -1,4 +1,9 @@
-import { BaseExecutor, ExecuteInput, type ProviderCredentials } from "./base.ts";
+import {
+  BaseExecutor,
+  ExecuteInput,
+  type ProviderConfig,
+  type ProviderCredentials,
+} from "./base.ts";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
 import { getModelTargetFormat } from "../config/providerModels.ts";
 import {
@@ -28,9 +33,11 @@ export interface RefreshedCopilotCredentials {
   providerSpecificData?: Record<string, unknown>;
 }
 
+type GithubExecutorConfig = ProviderConfig & Record<string, unknown>;
+
 export class GithubExecutor extends BaseExecutor {
-  constructor() {
-    super("github", PROVIDERS.github);
+  constructor(provider = "github", config?: GithubExecutorConfig) {
+    super(provider, config ?? PROVIDERS.github);
   }
 
   getCopilotToken(credentials: Record<string, any> | null | undefined) {
@@ -59,8 +66,24 @@ export class GithubExecutor extends BaseExecutor {
     return !(m.includes("gemini") || m.includes("claude"));
   }
 
-  buildUrl(model: string, _stream: boolean, _urlIndex = 0) {
-    const targetFormat = getModelTargetFormat("gh", model);
+  buildUrl(
+    model: string,
+    _stream: boolean,
+    _urlIndex = 0,
+    credentials?: ProviderCredentials | null
+  ) {
+    // #2905/#7364-pattern: a custom Copilot model's per-model targetFormat
+    // override isn't in the static PROVIDER_MODELS registry, so
+    // getModelTargetFormat() can't see it. chatCore/executionCredentials.ts
+    // threads the resolved override onto providerSpecificData.targetFormat
+    // for exactly this case — prefer it when present.
+    const overrideTargetFormat = (
+      credentials as { providerSpecificData?: { targetFormat?: unknown } }
+    )?.providerSpecificData?.targetFormat;
+    const targetFormat =
+      typeof overrideTargetFormat === "string"
+        ? overrideTargetFormat
+        : getModelTargetFormat("gh", model);
     // Claude models: route to Copilot's Anthropic-native /v1/messages shim — the
     // only Copilot endpoint that surfaces prompt-cache token counts for Claude and
     // avoids a lossy round-trip of tool_use/tool_result/thinking content blocks

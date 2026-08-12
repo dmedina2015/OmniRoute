@@ -230,9 +230,8 @@ const RAW_CONFIGS: TokenExtractionConfig[] = [
     "Microsoft Copilot",
     "https://copilot.microsoft.com/",
     "https://copilot.microsoft.com",
-    [{ type: "cookie", name: "RPSCAuth", domain: ".microsoft.com" }],
-    "Log in with your Microsoft account at copilot.microsoft.com. The session auth cookie will be extracted.",
-    { cookieDomain: ".microsoft.com" }
+    [{ type: "header", name: "Authorization" }],
+    "Log in with your Microsoft account at copilot.microsoft.com. The bearer access token will be extracted from an authenticated request."
   ),
 
   // ── DuckDuckGo Web ────────────────────────────────────────

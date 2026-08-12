@@ -215,6 +215,10 @@ export function selectCompressionPlan(
 ): DerivedPlan {
   let plan = resolveBasePlan(config, comboId, estimatedTokens, combos, header);
 
+  // The master switch is a hard kill. In particular, adaptive context-budget planning must
+  // never turn compression back on after resolveBasePlan() has selected the disabled plan.
+  if (!config.enabled) return plan;
+
   // Adaptive context-budget floor/escalation (D-C4): after the base plan, replacing the
   // (now-bypassed) auto-trigger branch. Pure resolver; chatCore supplies the model limit.
   if (adaptiveEnabled(config) && config.contextBudget) {

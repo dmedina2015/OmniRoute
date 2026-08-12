@@ -120,6 +120,8 @@ test("nativeCodexPassthrough delegates to shouldUseNativeCodexPassthrough (codex
       provider: "codex",
       sourceFormat: r.sourceFormat,
       endpointPath: r.endpointPath,
+      body: { input: "x" },
+      headers: new Headers(),
     })
   );
 });

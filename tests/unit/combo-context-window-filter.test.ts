@@ -298,6 +298,65 @@ test("combo rejects a known oversized request before upstream dispatch", async (
   assert.equal(body.diagnostics.attempted, 0);
 });
 
+test("native Responses context bypasses catalog overflow only for all-Codex pools (#8932)", () => {
+  saveModelsDevCapabilities({
+    codex: {
+      large: capabilityEntry(272_000),
+    },
+    "unit-known-context": {
+      large: capabilityEntry(272_000),
+    },
+  });
+  const body = bigContextBody(275_000);
+
+  assert.equal(
+    getKnownContextOverflow([target("codex/large")], body, {
+      clientManagedResponsesContext: true,
+    }),
+    null
+  );
+  assert.equal(
+    getKnownContextOverflow([target("codex/large"), target("chatgpt-web-codex/large")], body, {
+      clientManagedResponsesContext: true,
+    }),
+    null
+  );
+  assert.ok(
+    getKnownContextOverflow([target("unit-known-context/large")], body, {
+      clientManagedResponsesContext: true,
+    }),
+    "non-Codex pools must retain the catalog overflow guard"
+  );
+});
+
+test("native Responses context reaches an all-Codex target beyond its catalog hint (#8932)", async () => {
+  saveModelsDevCapabilities({
+    codex: {
+      large: capabilityEntry(272_000),
+    },
+  });
+  let dispatches = 0;
+
+  const response = await handleComboChat({
+    body: bigContextBody(275_000),
+    combo: {
+      name: "native-codex-overflow",
+      strategy: "priority",
+      models: ["codex/large"],
+    },
+    clientManagedResponsesContext: true,
+    isModelAvailable: async () => true,
+    handleSingleModel: async () => {
+      dispatches += 1;
+      return new Response("ok", { status: 200 });
+    },
+    log: noopLog,
+  });
+
+  assert.notEqual(response.status, 400);
+  assert.equal(dispatches, 1);
+});
+
 test("input-only maxInputTokens is not double-counted against the output reserve (#7039)", () => {
   // Faithful reproduction of #7039 (Codex gpt-5.5-xhigh):
   //   maxInputTokens = 272_000, contextWindow = 400_000, maxOutputTokens = 128_000

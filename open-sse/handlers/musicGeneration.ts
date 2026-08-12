@@ -32,6 +32,7 @@ import {
   parseKieResultJson,
 } from "../utils/kieTask.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
+import { handleFalMusicGeneration } from "./mediaGeneration/fal.ts";
 
 function normalizeKieSunoModel(model: string): string {
   const map: Record<string, string> = {
@@ -122,6 +123,10 @@ export async function handleMusicGeneration({ body, credentials, log }) {
         error: sanitizeErrorMessage(err?.message || "Vertex Lyria generation failed"),
       };
     }
+  }
+
+  if (providerConfig.format === "fal-ai-music") {
+    return handleFalMusicGeneration({ model, provider, providerConfig, body, credentials, log });
   }
 
   if (providerConfig.format === "comfyui") {

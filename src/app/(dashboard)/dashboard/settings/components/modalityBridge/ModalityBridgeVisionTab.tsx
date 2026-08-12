@@ -19,6 +19,7 @@ interface VisionState {
   modalityBridgeVisionMode: VisionBridgeMode;
   modalityBridgeVisionModel: string;
   modalityBridgeVisionTaskAware: boolean;
+  visionBridgeRerouteTextOnly: boolean;
   modalityBridgeVisionPrompt: string;
   modalityBridgeVisionTimeout: number;
   modalityBridgeVisionMaxImages: number;
@@ -34,6 +35,7 @@ function fromApi(data: Record<string, unknown>): VisionState {
     modalityBridgeVisionMode: runtime.mode,
     modalityBridgeVisionModel: runtime.model,
     modalityBridgeVisionTaskAware: runtime.taskAware,
+    visionBridgeRerouteTextOnly: data.visionBridgeRerouteTextOnly === true,
     modalityBridgeVisionPrompt: runtime.prompt,
     modalityBridgeVisionTimeout: runtime.timeoutMs,
     modalityBridgeVisionMaxImages: runtime.maxImages,
@@ -117,6 +119,13 @@ export default function ModalityBridgeVisionTab() {
           onChange={(checked) => void update({ modalityBridgeVisionEnabled: checked })}
           label={t("visionBridgeEnabledLabel")}
           description={t("visionBridgeEnabledDesc")}
+        />
+
+        <Toggle
+          checked={settings.visionBridgeRerouteTextOnly}
+          onChange={(checked) => void update({ visionBridgeRerouteTextOnly: checked })}
+          label={t("visionBridgeRerouteTextOnlyLabel")}
+          description={t("visionBridgeRerouteTextOnlyDesc")}
         />
 
         <div>

@@ -575,6 +575,9 @@ test("OpenAI -> Antigravity wraps Gemini requests in a Cloud Code envelope", () 
   );
 
   assert.equal(result.project, "proj-1");
+  // #9008: identity tool-name mappings (weather → weather) are retained so the
+  // response path can restore the caller's original casing. The Antigravity
+  // executor strips `_toolNameMap` before the upstream wire body.
   assert.deepEqual(Object.keys(result), [
     "project",
     "requestId",

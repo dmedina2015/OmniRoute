@@ -82,23 +82,31 @@ test("cleanup: scheduler is wired into server-init.ts", () => {
 
 test("cleanup: mcp_tool_audit uses correct table name (not 'mcp_audit_log')", () => {
   assert.ok(
-    source.includes("DELETE FROM mcp_tool_audit WHERE"),
-    "must use correct table name mcp_tool_audit"
+    source.includes("DELETE FROM mcp_tool_audit WHERE created_at < ?"),
+    "mcp_tool_audit cleanup must use its created_at column"
   );
   assert.ok(
     !source.includes("DELETE FROM mcp_audit_log WHERE"),
     "must NOT use non-existent table name mcp_audit_log"
   );
+  assert.ok(
+    !source.includes("DELETE FROM mcp_tool_audit WHERE timestamp"),
+    "must NOT use timestamp for mcp_tool_audit"
+  );
 });
 
 test("cleanup: a2a_task_events uses correct table name (not 'a2a_events')", () => {
   assert.ok(
-    source.includes("DELETE FROM a2a_task_events WHERE"),
-    "must use correct table name a2a_task_events"
+    source.includes("DELETE FROM a2a_task_events WHERE created_at < ?"),
+    "a2a_task_events cleanup must use its created_at column"
   );
   assert.ok(
     !source.includes("DELETE FROM a2a_events WHERE"),
     "must NOT use non-existent table name a2a_events"
+  );
+  assert.ok(
+    !source.includes("DELETE FROM a2a_task_events WHERE timestamp"),
+    "must NOT use timestamp for a2a_task_events"
   );
 });
 

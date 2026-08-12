@@ -89,7 +89,7 @@
     }
   },
   "agnes": {
-    "format": "openai",
+    "format": "openai-responses",
     "headers": {
       "apiKey": {
         "Accept": "text/event-stream",
@@ -107,8 +107,8 @@
       }
     },
     "url": {
-      "nonStream": "https://apihub.agnes-ai.com/v1/chat/completions",
-      "stream": "https://apihub.agnes-ai.com/v1/chat/completions"
+      "nonStream": "https://apihub.agnes-ai.com/v1/responses",
+      "stream": "https://apihub.agnes-ai.com/v1/responses"
     }
   },
   "agy": {
@@ -775,6 +775,8 @@
   },
   "cheaperinference": {
     "format": "openai",
+  "chatgpt-web-codex": {
+    "format": "openai-responses",
     "headers": {
       "apiKey": {
         "Accept": "text/event-stream",
@@ -794,6 +796,8 @@
     "url": {
       "nonStream": "https://api.cheaperinference.com/v1/chat/completions",
       "stream": "https://api.cheaperinference.com/v1/chat/completions"
+      "nonStream": "https://chatgpt.com",
+      "stream": "https://chatgpt.com"
     }
   },
   "chenzk": {
@@ -2162,33 +2166,6 @@
       "stream": "https://api.githubcopilot.com/chat/completions"
     }
   },
-  "github-models": {
-    "format": "openai",
-    "headers": {
-      "apiKey": {
-        "Accept": "text/event-stream",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2026-03-10"
-      },
-      "nonStream": {
-        "Accept": "application/vnd.github+json",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2026-03-10"
-      },
-      "oauth": {
-        "Accept": "text/event-stream",
-        "Authorization": "Bearer <TOK>",
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2026-03-10"
-      }
-    },
-    "url": {
-      "nonStream": "https://models.github.ai/inference/chat/completions",
-      "stream": "https://models.github.ai/inference/chat/completions"
-    }
-  },
   "gitlab-duo": {
     "format": "openai",
     "headers": {
@@ -3404,6 +3381,26 @@
       "nonStream": "https://api.morphllm.com/v1/chat/completions",
       "stream": "https://api.morphllm.com/v1/chat/completions"
     }
+  },
+  "muse-code": {
+    "format": "openai",
+    "headers": {
+      "apiKey": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "nonStream": {
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      },
+      "oauth": {
+        "Accept": "text/event-stream",
+        "Authorization": "Bearer <TOK>",
+        "Content-Type": "application/json"
+      }
+    },
+    "url": {}
   },
   "muse-spark-web": {
     "format": "openai",
