@@ -416,7 +416,8 @@ export class AdaptaWebExecutor extends BaseExecutor {
 
     const requestPayload = {
       messages: adaptaMessages,
-      aiModelId,
+      // Upstream expects `modelAi` (string key) — map local registry key to upstream model id
+      modelAi: aiModelId,
     };
 
     const headers: Record<string, string> = {
