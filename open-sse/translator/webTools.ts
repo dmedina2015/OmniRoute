@@ -33,8 +33,13 @@ const TOOL_CLOSE_RE = /<\/tool>/g;
 const TOOL_CALL_OPEN_RE = /<tool_call(?:\s[^<>]*)?>/g;
 const TOOL_CALL_CLOSE_RE = /<\/tool_call>/g;
 
+// A genuine, unclosed opener — used only as a LAST-RESORT salvage gate (see
+// findUnclosedToolOpenerSalvage below). Deliberately NOT global-state-shared with
+// TOOL_OPEN_RE/TOOL_CALL_OPEN_RE so callers can safely re-run it without resetting lastIndex.
+const ANY_TOOL_OPEN_RE = /<tool>|<tool_call(?:\s[^<>]*)?>/gi;
+
 const DSML_INVOKE_RE =
-  /<(?<dsml>｜｜DSML｜｜|\|DSML\|)\s*invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/\k<dsml>\s*invoke\s*>/g;
+  /<(?<dsml>｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/\k<dsml>\s*invoke\s*>/g;
 
 function normalizeDsmlToolCalls(text: string): string {
   DSML_INVOKE_RE.lastIndex = 0;
@@ -361,6 +366,81 @@ function rangesOverlap(
   return a.start < b.end && b.start < a.end;
 }
 
+/**
+ * Balanced-`{...}` salvage (quote/escape aware), mirroring
+ * deepseekWebTools.ts::salvageLeadingJsonObject. Duplicated here instead of imported:
+ * deepseekWebTools.ts already imports from this module, so importing back would cycle.
+ * Returns the first fully-balanced JSON object starting at or after the first `{`, or
+ * null when nothing ever balances (genuinely truncated — never salvaged, see #9343 note
+ * on findUnclosedToolOpenerSalvage below).
+ */
+function salvageLeadingJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let quote: '"' | "'" | "" = "";
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote) {
+      if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch as '"' | "'";
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Last-resort recovery for a <tool>/<tool_call> block whose CLOSING tag never arrived intact
+ * — e.g. a model's own native tool-call dialect leaking corrupted closing tokens instead of
+ * `</tool>` (observed via adapta-web/Kimi K2.7 Code: Adapta's rendering of Kimi's native
+ * close didn't match our contract, so findTagBlocks() found no complete pair and the whole
+ * reply — including the raw tool-call JSON — leaked to the client as plain prose).
+ *
+ * Gated on a genuine `<tool>`/`<tool_call>` OPENING tag so this never weakens the #9343
+ * bare-JSON hardening above: unlike `findBareJsonCandidates()` (intentionally unused — a
+ * bare JSON object anywhere in text, with no explicit opener, must never auto-execute), this
+ * only fires when the model itself started the real protocol. Only the LAST unclosed opener
+ * is considered, matching findTagBlocks' "one opener per call" assumption.
+ */
+function findUnclosedToolOpenerSalvage(text: string): ToolParseCandidate | null {
+  let lastMatch: RegExpExecArray | null = null;
+  const re = new RegExp(ANY_TOOL_OPEN_RE.source, ANY_TOOL_OPEN_RE.flags);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    lastMatch = m;
+  }
+  if (!lastMatch) return null;
+
+  const innerStart = lastMatch.index + lastMatch[0].length;
+  const salvaged = salvageLeadingJsonObject(text.slice(innerStart));
+  if (!salvaged) return null;
+
+  return {
+    raw: salvaged,
+    start: lastMatch.index,
+    end: text.length,
+    requireRequestedTool: false,
+  };
+}
+
 export function stripRanges(text: string, ranges: Array<{ start: number; end: number }>): string {
   let content = text;
   const sorted = [...ranges].sort((a, b) => b.start - a.start);
@@ -496,6 +576,15 @@ export function parseToolCallsFromText(
   }
 
   candidates.sort((a, b) => a.start - b.start);
+
+  // No complete <tool>/<tool_call> pair was found, but gate on a genuine opener still
+  // being present (#tool-leak-corrupted-close) before trying to salvage a trailing,
+  // malformed-close block — see findUnclosedToolOpenerSalvage's docstring for why this
+  // does not reopen the #9343 bare-JSON hardening.
+  if (candidates.length === 0) {
+    const salvaged = findUnclosedToolOpenerSalvage(normalizedText);
+    if (salvaged) candidates.push(salvaged);
+  }
 
   const toolCalls: OpenAIToolCall[] = [];
   const acceptedRanges: Array<{ start: number; end: number }> = [];

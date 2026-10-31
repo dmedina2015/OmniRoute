@@ -143,3 +143,59 @@ test("parseToolCallsFromText tolerates a tool block with no arguments", () => {
   assert.equal(toolCalls[0].function.name, "ping");
   assert.equal(toolCalls[0].function.arguments, "{}");
 });
+
+// #tool-leak-corrupted-close: the model opens the real <tool> protocol (genuine intent —
+// the #9343 bare-JSON hardening above still requires this explicit opener), but its native
+// dialect's closing tokens leak through instead of a clean </tool> (observed via
+// adapta-web/Kimi K2.7 Code: Adapta's own rendering of Kimi's native tool-call close didn't
+// match our `</tool>` contract, so findTagBlocks() never found a complete pair and the whole
+// thing — including the raw JSON — leaked to the client as plain content with finish_reason
+// "stop"). Recover by salvaging the first balanced JSON object right after a genuine <tool>
+// opener even when no matching closer is found, mirroring deepseekWebTools.ts's proven
+// salvageLeadingJsonObject() fix for the same "<tool>{json}<garbage>" shape.
+const WRITE_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "write",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" }, content: { type: "string" } },
+      },
+    },
+  },
+];
+
+test("parseToolCallsFromText salvages a <tool>{json} block whose close was replaced by corrupted native tokens", () => {
+  const text =
+    "Vou escrever o arquivo.\n\n" +
+    '<tool>{"name": "write", "arguments": {"path": "daniel.txt", "content": "ola mundo"}}' +
+    "</｜DSML｜ parameter></｜DSML｜ invoke></｜DSML｜ calls>";
+  const { content, toolCalls } = parseToolCallsFromText(text, "call", WRITE_TOOLS);
+  assert.ok(
+    toolCalls && toolCalls.length === 1,
+    "the malformed-close block must still be recovered"
+  );
+  assert.equal(toolCalls[0].function.name, "write");
+  assert.deepEqual(JSON.parse(toolCalls[0].function.arguments), {
+    path: "daniel.txt",
+    content: "ola mundo",
+  });
+  assert.ok(!content.includes("<tool>"), "the raw envelope must not leak into visible content");
+  assert.ok(!content.includes("DSML"), "the corrupted close markers must not leak either");
+  assert.ok(content.includes("Vou escrever o arquivo."), "surrounding prose is preserved");
+});
+
+test("parseToolCallsFromText does NOT salvage when the JSON itself is genuinely truncated (no opener-gated false positive)", () => {
+  const text = '<tool>{"name": "write", "arguments": {"path": "a.txt" truncated mid-stream';
+  const { content, toolCalls } = parseToolCallsFromText(text, "call", WRITE_TOOLS);
+  assert.equal(toolCalls, null, "a genuinely unbalanced object must not be promoted");
+  assert.equal(content, text, "unrecovered content passes through unchanged");
+});
+
+test("parseToolCallsFromText still refuses bare JSON with no <tool> opener at all, even near a corrupted-looking suffix (#9343 preserved)", () => {
+  const text = '{"name":"write","arguments":{"path":"a.txt","content":"x"}}</｜DSML｜ parameter>';
+  const { content, toolCalls } = parseToolCallsFromText(text, "call", WRITE_TOOLS);
+  assert.equal(toolCalls, null, "no <tool> opener means no genuine protocol intent");
+  assert.equal(content, text);
+});

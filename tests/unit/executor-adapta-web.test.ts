@@ -211,4 +211,56 @@ describe("AdaptaWebExecutor", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  // #tool-leak-corrupted-close: reproduces the Kimi K2.7 Code / Adapta report where the
+  // model's own native closing tokens leaked through instead of a clean </tool>, end-to-end
+  // through the real streaming executor path (not just the parser unit above).
+  it("salvages a <tool>{json} call whose close was replaced by corrupted native tokens, over streaming", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.corrupted-close-test.jwt" });
+      }
+      const delta =
+        'Vou escrever o arquivo.\n\n<tool>{"name":"write","arguments":{"path":"daniel.txt","content":"ola"}}' +
+        "</｜DSML｜ parameter></｜DSML｜ invoke></｜DSML｜ calls>";
+      const sse =
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta })}\n\n` +
+        `data: ${JSON.stringify({ type: "done" })}\n\n`;
+      return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: true,
+        body: {
+          messages: [{ role: "user", content: "Crie o arquivo daniel.txt" }],
+          tools: [
+            {
+              type: "function",
+              function: { name: "write", parameters: { type: "object", properties: {} } },
+            },
+          ],
+        },
+        credentials: { apiKey: "__client=unique-corrupted-close-cookie" },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 200);
+      const sseText = await result.response.text();
+      assert.doesNotMatch(sseText, /DSML/, "the corrupted native close tokens must not leak");
+      assert.doesNotMatch(sseText, /<tool>/, "the raw envelope must not leak as visible content");
+      assert.match(sseText, /"finish_reason":"tool_calls"/);
+      assert.match(sseText, /"name":"write"/);
+      assert.match(sseText, /\\"path\\":\\"daniel\.txt\\"/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
