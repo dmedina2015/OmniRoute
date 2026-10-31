@@ -158,4 +158,57 @@ describe("AdaptaWebExecutor", () => {
     assert.ok(last.parts[0].text.includes("Available tools:"));
     assert.ok(last.parts[0].text.includes("bash: run a shell command"));
   });
+
+  // #tool-leak-raw-text: when the request streams AND carries tools[], execute() used to
+  // forward Adapta's raw text-delta events straight through as plain `content` chunks via
+  // transformStream() — it never ran buildToolAwareResult() on them. The upstream's literal
+  // `<tool>{"name":...,"arguments":{...}}</tool>` envelope reached the client as visible
+  // assistant prose instead of becoming `tool_calls`, so agentic clients (OpenCode's default
+  // request is streaming) saw a fake "I called the tool" narration that never actually
+  // executed anything, instead of a real tool_calls turn they could act on.
+  it("parses <tool> blocks into tool_calls even when streaming is requested", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.tool-leak-test.jwt" });
+      }
+      const sse =
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta: '<tool>{"name":"write","arguments":{"path":"daniel.txt","content":"oi"}}</tool>' })}\n\n` +
+        `data: ${JSON.stringify({ type: "done" })}\n\n`;
+      return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: true,
+        body: {
+          messages: [{ role: "user", content: "Crie o arquivo daniel.txt" }],
+          tools: [
+            {
+              type: "function",
+              function: { name: "write", parameters: { type: "object", properties: {} } },
+            },
+          ],
+        },
+        credentials: { apiKey: "__client=unique-tool-leak-cookie" },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 200);
+      const sseText = await result.response.text();
+      // The raw <tool> envelope must never reach the client as visible text.
+      assert.doesNotMatch(sseText, /"content":"<tool>/);
+      assert.match(sseText, /"finish_reason":"tool_calls"/);
+      assert.match(sseText, /"name":"write"/);
+      assert.match(sseText, /\\"path\\":\\"daniel\.txt\\"/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

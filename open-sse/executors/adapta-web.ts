@@ -1,5 +1,6 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import { prepareToolMessages, buildToolAwareResult } from "../translator/webTools.ts";
+import { prepareToolMessages } from "../translator/webTools.ts";
+import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 
 const ADAPTA_APP_URL = "https://agent.adapta.one";
@@ -596,8 +597,18 @@ export class AdaptaWebExecutor extends BaseExecutor {
       };
     }
 
-    // 4. Stream or collect
-    if (stream !== false) {
+    // 4. Stream or collect.
+    // Real token-by-token streaming is only safe when no tools are requested: Adapta has
+    // no native tool calling, so a tool-aware reply arrives as a literal `<tool>{...}</tool>`
+    // envelope in the text. Streaming that straight through (the previous behavior) leaked
+    // the raw envelope to the client as visible assistant prose with finish_reason "stop" —
+    // it never became `tool_calls`, so agentic clients (OpenCode defaults to streaming
+    // requests) saw a fake "I called the tool" narration that never actually ran anything
+    // (#tool-leak-raw-text). Buffer the full reply first whenever tools are in play, parse
+    // it with buildToolAwareResult()/buildToolModeResponse(), THEN replay it as a single
+    // terminal SSE chunk if the client asked for streaming — mirroring the established
+    // chatgptWebTools.ts pattern already used by gemini-web.ts, maxai.ts, uc.ts, etc.
+    if (!hasTools && stream !== false) {
       return {
         response: new Response(transformStream(resp.body!, model), {
           status: 200,
@@ -613,7 +624,8 @@ export class AdaptaWebExecutor extends BaseExecutor {
       };
     }
 
-    // Non-streaming: collect all text-delta events
+    // Collect all text-delta events (used for: non-streaming requests, and any
+    // tool-aware request regardless of its requested stream mode).
     const decoder = new TextDecoder();
     const reader = resp.body!.getReader();
     let buf = "";
@@ -662,46 +674,25 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     if (hasTools) {
-      const { content, toolCalls, finishReason } = buildToolAwareResult(
-        fullText,
-        requestedTools,
-        "adp"
+      const bufferedJson = new Response(
+        JSON.stringify({
+          id: `chatcmpl-adp-${Date.now()}`,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [
+            { index: 0, message: { role: "assistant", content: fullText }, finish_reason: "stop" },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
       );
-      if (toolCalls) {
-        return {
-          response: new Response(
-            JSON.stringify({
-              id: `chatcmpl-adp-${Date.now()}`,
-              object: "chat.completion",
-              created: Math.floor(Date.now() / 1000),
-              model,
-              choices: [
-                {
-                  index: 0,
-                  message: { role: "assistant", content: null, tool_calls: toolCalls },
-                  finish_reason: finishReason,
-                },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          ),
-          url: ADAPTA_STREAM_URL,
-          headers,
-          transformedBody: requestPayload,
-        };
-      }
       return {
-        response: new Response(
-          JSON.stringify({
-            id: `chatcmpl-adp-${Date.now()}`,
-            object: "chat.completion",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        ),
+        response: await buildToolModeResponse(bufferedJson, requestedTools, stream !== false, {
+          cid: `chatcmpl-adp-${Date.now()}`,
+          created: Math.floor(Date.now() / 1000),
+          model,
+          idSeed: "adp",
+        }),
         url: ADAPTA_STREAM_URL,
         headers,
         transformedBody: requestPayload,
