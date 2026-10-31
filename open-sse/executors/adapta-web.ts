@@ -263,17 +263,36 @@ export function buildAdaptaMessages(
   modelKey: string,
   chatId: string
 ): AdaptaMessage[] {
-  let systemText = "";
+  // Split system/developer content into "leading" (appears before the first real
+  // turn — the client's own system prompt) and "trailing" (appears after the last
+  // real turn — e.g. the <tool> contract `prepareToolMessages()` deliberately
+  // appends LAST, see its docstring: prepending it loses to big system prompts).
+  // Merging both into one blob glued onto turn 1 — the previous behavior — buried
+  // the trailing tool contract inside a huge leading block for clients like
+  // OpenCode whose system prompt runs tens of KB, so the model never reliably
+  // saw it (#tool-contract-buried).
+  let lastNonSystemIdx = -1;
+  messages.forEach((msg, idx) => {
+    const role = msg.role === "developer" ? "system" : msg.role;
+    if (role !== "system") lastNonSystemIdx = idx;
+  });
+
+  let leadingSystemText = "";
+  let trailingSystemText = "";
   const rest: OpenAIMessage[] = [];
 
-  for (const msg of messages) {
+  messages.forEach((msg, idx) => {
     const role = msg.role === "developer" ? "system" : msg.role;
     if (role === "system") {
-      systemText += (systemText ? "\n" : "") + extractText(msg.content);
+      if (idx > lastNonSystemIdx) {
+        trailingSystemText += (trailingSystemText ? "\n" : "") + extractText(msg.content);
+      } else {
+        leadingSystemText += (leadingSystemText ? "\n" : "") + extractText(msg.content);
+      }
     } else {
       rest.push(msg);
     }
-  }
+  });
 
   // tool_call_id -> function name, so a later tool-result turn can be labeled
   // with which function produced it (Adapta has no native "tool" role/field).
@@ -334,16 +353,26 @@ export function buildAdaptaMessages(
       continue;
     }
 
-    if (!systemInjected && systemText && msg.role === "user") {
+    if (!systemInjected && leadingSystemText && msg.role === "user") {
       adapted.push({
         id,
         role: "user",
-        parts: [{ type: "text", text: `${systemText}\n\n${text}` }],
+        parts: [{ type: "text", text: `${leadingSystemText}\n\n${text}` }],
       });
       systemInjected = true;
     } else {
       adapted.push({ id, role: "user", parts: [{ type: "text", text }] });
     }
+  }
+
+  if (trailingSystemText) {
+    // Always its own turn — the last thing the model reads before generating,
+    // never merged into the leading system block or into the last real user query.
+    adapted.push({
+      id: crypto.randomUUID(),
+      role: "user",
+      parts: [{ type: "text", text: trailingSystemText }],
+    });
   }
 
   return adapted;

@@ -121,4 +121,41 @@ describe("AdaptaWebExecutor", () => {
     assert.ok(msgs[2].parts[0].text.includes("get_weather"));
     assert.ok(msgs[2].parts[0].text.includes('"temperature_c":18'));
   });
+
+  // #tool-contract-buried: prepareToolMessages() (translator/webTools.ts) deliberately
+  // appends the full <tool> contract as the LAST message (after the whole conversation) —
+  // its own docstring documents that prepending it loses to big system prompts (observed
+  // 0/3 tool calls vs 16/17 for trailing placement). buildAdaptaMessages used to fold EVERY
+  // system message (the client's original huge system prompt AND the trailing tool
+  // contract) into one blob glued onto the FIRST user message, silently undoing that fix
+  // for every agentic client (e.g. OpenCode) whose system prompt is large.
+  it("buildAdaptaMessages keeps a trailing tool contract at the tail, not glued to turn 1", () => {
+    const hugeSystemPrompt = "You are a coding agent.\n".repeat(2000); // simulate OpenCode's big system prompt
+    const toolContract =
+      'To invoke one, reply with a <tool> block:\n<tool>{"name": "<tool_name>", "arguments": { ... }}</tool>\n\nAvailable tools:\n- bash: run a shell command\n- write: write a file';
+
+    const msgs = mod.buildAdaptaMessages(
+      [
+        { role: "system", content: hugeSystemPrompt },
+        { role: "user", content: "Liste os arquivos do diretório atual." },
+        // prepareToolMessages() appends this AFTER the whole conversation.
+        { role: "system", content: toolContract },
+      ],
+      "KIMI_K2_7_CODE",
+      "chat-1"
+    );
+
+    assert.equal(msgs.length, 2);
+    assert.equal(msgs[0].role, "user");
+    assert.ok(msgs[0].parts[0].text.startsWith("You are a coding agent."));
+    assert.ok(
+      !msgs[0].parts[0].text.includes("Available tools:"),
+      "the trailing tool contract must not be buried inside turn 1's huge leading system block"
+    );
+
+    // The tool contract must survive at the tail — the last thing the model reads.
+    const last = msgs[msgs.length - 1];
+    assert.ok(last.parts[0].text.includes("Available tools:"));
+    assert.ok(last.parts[0].text.includes("bash: run a shell command"));
+  });
 });
