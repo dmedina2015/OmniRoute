@@ -201,9 +201,18 @@ async function getSessionJwt(
 
 // ── Request/response translation ──────────────────────────────────────────────
 
+interface OpenAIToolCallMsg {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
 interface OpenAIMessage {
   role: string;
   content: unknown;
+  tool_calls?: OpenAIToolCallMsg[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 interface AdaptaPart {
@@ -232,6 +241,22 @@ function extractText(content: unknown): string {
   return String(content ?? "");
 }
 
+/**
+ * Render an assistant's tool_calls as `<tool>{...}</tool>` blocks — the same envelope
+ * `translator/webTools.ts` teaches the model to emit — and fold them into its text so
+ * a later history re-send still shows the model its own prior call.
+ */
+function renderAssistantToolCalls(toolCalls: OpenAIToolCallMsg[]): string[] {
+  const lines: string[] = [];
+  for (const tc of toolCalls) {
+    const fnName = tc?.function?.name;
+    if (!fnName) continue;
+    const args = tc.function?.arguments ?? "{}";
+    lines.push(`<tool>{"name":${JSON.stringify(fnName)},"arguments":${args}}</tool>`);
+  }
+  return lines;
+}
+
 /** Build the final Adapta messages array, injecting system prompt into first user message. */
 export function buildAdaptaMessages(
   messages: OpenAIMessage[],
@@ -250,12 +275,50 @@ export function buildAdaptaMessages(
     }
   }
 
+  // tool_call_id -> function name, so a later tool-result turn can be labeled
+  // with which function produced it (Adapta has no native "tool" role/field).
+  const callIdToName = new Map<string, string>();
+  for (const msg of rest) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
+    for (const tc of msg.tool_calls) {
+      if (tc?.id && typeof tc.function?.name === "string") {
+        callIdToName.set(String(tc.id), tc.function.name);
+      }
+    }
+  }
+
   const adapted: AdaptaMessage[] = [];
   let systemInjected = false;
 
   for (const msg of rest) {
+    // Adapta's wire format only knows "user"/"assistant" roles. Previously a
+    // role:"tool" message hit `continue` here and was silently dropped — the
+    // model never saw its own tool result, so a follow-up turn re-derived the
+    // same "no history" prompt and re-emitted the identical tool call forever.
+    // Fold it into a user turn instead, labeled with the function that produced it.
+    if (msg.role === "tool") {
+      const text = extractText(msg.content).trim();
+      if (!text) continue;
+      const name = msg.name || callIdToName.get(String(msg.tool_call_id ?? "")) || "tool";
+      const id = crypto.randomUUID();
+      adapted.push({
+        id,
+        role: "user",
+        parts: [{ type: "text", text: `[Tool result: ${name}]\n${text}` }],
+      });
+      continue;
+    }
+
     if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const text = extractText(msg.content);
+    let text = extractText(msg.content);
+
+    // An assistant turn that only called a tool has `content: null` — extractText()
+    // alone would collapse it to "", the second half of the same drop (#tool-exchange-dropped).
+    if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      const callLines = renderAssistantToolCalls(msg.tool_calls);
+      text = [text.trim(), ...callLines].filter(Boolean).join("\n\n");
+    }
+
     if (!text.trim() && msg.role !== "assistant") continue;
 
     const id = crypto.randomUUID();

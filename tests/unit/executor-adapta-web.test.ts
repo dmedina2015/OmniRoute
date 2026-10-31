@@ -82,4 +82,43 @@ describe("AdaptaWebExecutor", () => {
     assert.equal(msgs[1].state, "done");
     assert.equal(msgs[1].metadata?.model, "CLAUDE_5_5_SONNET");
   });
+
+  // #tool-exchange-dropped: Adapta's wire format has no "tool" role and
+  // buildAdaptaMessages used to `continue` past role:"tool" messages entirely,
+  // silently dropping the function result. The prior assistant tool_calls
+  // message also collapsed to empty text. Net effect: the model never saw its
+  // own tool call or the result, so a follow-up turn re-derived the same
+  // "no history" prompt and re-emitted the identical tool call forever.
+  it("buildAdaptaMessages folds assistant tool_calls and tool results into the history", () => {
+    const msgs = mod.buildAdaptaMessages(
+      [
+        { role: "user", content: "Qual a temperatura em Lisboa?" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "get_weather", arguments: '{"city":"Lisboa"}' },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: "call_1", content: '{"temperature_c":18}' },
+      ],
+      "KIMI_K2_7_CODE",
+      "chat-1"
+    );
+
+    assert.equal(msgs.length, 3);
+
+    assert.equal(msgs[1].role, "assistant");
+    assert.ok(msgs[1].parts[0].text.includes("get_weather"));
+    assert.ok(msgs[1].parts[0].text.includes('"city":"Lisboa"'));
+
+    // The tool result must reach the model as a conversation turn — not be dropped.
+    assert.equal(msgs[2].role, "user");
+    assert.ok(msgs[2].parts[0].text.includes("get_weather"));
+    assert.ok(msgs[2].parts[0].text.includes('"temperature_c":18'));
+  });
 });
