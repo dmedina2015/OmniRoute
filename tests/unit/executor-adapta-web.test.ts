@@ -263,4 +263,75 @@ describe("AdaptaWebExecutor", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  // #adapta-temporary-chat: iterating through an agentic client (OpenCode, curl tests, etc.)
+  // sends one Adapta chat per turn, each one permanently polluting the user's
+  // agent.adapta.one web history — the conversation is already persisted on the client's own
+  // side (OpenCode's session store), so there is no reason for Adapta's web UI to keep it too.
+  it("defaults isTemporaryChat to true so iteration doesn't pollute the user's Adapta web history", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.temp-chat-default-test.jwt" });
+      }
+      return new Response(
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta: "oi" })}\n\n` +
+          `data: ${JSON.stringify({ type: "done" })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: false,
+        body: { messages: [{ role: "user", content: "oi" }] },
+        credentials: { apiKey: "__client=unique-temp-chat-cookie" },
+        signal: null,
+      });
+      assert.equal((result.transformedBody as Record<string, unknown>)?.isTemporaryChat, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("honors an explicit provider_options.adapta.isTemporaryChat override", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.temp-chat-override-test.jwt" });
+      }
+      return new Response(
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta: "oi" })}\n\n` +
+          `data: ${JSON.stringify({ type: "done" })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: false,
+        body: {
+          messages: [{ role: "user", content: "oi" }],
+          provider_options: { adapta: { isTemporaryChat: false } },
+        },
+        credentials: { apiKey: "__client=unique-temp-chat-override-cookie" },
+        signal: null,
+      });
+      assert.equal((result.transformedBody as Record<string, unknown>)?.isTemporaryChat, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

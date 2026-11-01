@@ -230,6 +230,28 @@ interface AdaptaMessage {
   state?: string;
 }
 
+/**
+ * Whether this request's Adapta chat should be created as temporary (not kept in the
+ * user's agent.adapta.one web history). Defaults to `true`: an agentic client (OpenCode,
+ * curl scripts, etc.) sends one Adapta chat per turn, and that conversation is already
+ * persisted on the client's own side — there's no reason for it to also permanently
+ * pollute the user's Adapta web UI. Opt back into persistent chats per request with
+ * `provider_options.adapta.isTemporaryChat` (or the `adapta-web` id, matching the
+ * `provider_options.<provider>` bag convention used by the search handlers).
+ */
+export function resolveIsTemporaryChat(bodyObj: Record<string, unknown>): boolean {
+  const providerOptions = bodyObj.provider_options;
+  if (!providerOptions || typeof providerOptions !== "object" || Array.isArray(providerOptions)) {
+    return true;
+  }
+  const bag =
+    (providerOptions as Record<string, unknown>).adapta ??
+    (providerOptions as Record<string, unknown>)["adapta-web"];
+  if (!bag || typeof bag !== "object" || Array.isArray(bag)) return true;
+  const override = (bag as Record<string, unknown>).isTemporaryChat;
+  return typeof override === "boolean" ? override : true;
+}
+
 /** Extract plain text from an OpenAI message content (string or content-parts array). */
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -548,7 +570,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
     const requestPayload = {
       chatId,
       id: chatId,
-      isTemporaryChat: false,
+      isTemporaryChat: resolveIsTemporaryChat(bodyObj),
       mandatoryTools: [],
       skipImagePromptOptimization: true,
       modelAi: modelKey,
