@@ -177,6 +177,13 @@ describe("webTools — prepareToolMessages", () => {
     assert.equal(messages[0].content, "weather in SP?");
   });
 
+  test("the reminder explicitly refuses the 'unregistered/platform tools only' confabulation", () => {
+    const messages = [{ role: "user", content: "weather in SP?" }];
+    const result = prepareToolMessages({ tools: WEATHER_TOOL }, messages);
+    const userMsg = result.effectiveMessages[0];
+    assert.match(String(userMsg.content), /unregistered|inactive/i);
+  });
+
   test("passes messages through untouched when there are no tools", () => {
     const messages = [{ role: "user", content: "hi" }];
     const result = prepareToolMessages({}, messages);
@@ -228,7 +235,8 @@ describe("webTools — prepareToolMessages", () => {
     const latestContent = String(result.effectiveMessages[2].content);
     assert.ok(latestContent.startsWith("weather in Paris?\n\n[Client protocol reminder"));
     assert.ok(latestContent.includes("client-tool contract in the system instructions"));
-    assert.ok(latestContent.endsWith("block protocol: get_weather.]"));
+    assert.ok(latestContent.includes("block protocol: get_weather"));
+    assert.ok(latestContent.endsWith("]"));
     // the original array and its objects must not be mutated
     assert.equal(messages[2].content, "weather in Paris?");
   });

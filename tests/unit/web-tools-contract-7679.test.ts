@@ -79,6 +79,25 @@ test("serializeToolsToPrompt uses the client-tool contract (#7679)", () => {
   assert.match(result, /These client tools ARE available/);
 });
 
+// ─── serializeToolsToPrompt — anti-refusal reinforcement (#adapta-tool-refusal) ──────────
+// Observed via adapta-web (Kimi K2.7 Code AND Claude 5.5 Sonnet, both through Adapta): the
+// model sometimes acknowledges seeing this contract yet still refuses, claiming only a
+// different "platform" tool catalog (web search, file/image generation, etc.) is genuinely
+// active, or narrating a separate/duplicate session. The contract must directly name and
+// refuse that specific confabulation instead of only asserting generic availability.
+
+test("serializeToolsToPrompt explicitly refuses the 'different/platform tool catalog' claim", () => {
+  const result = serializeToolsToPrompt(TOOLS);
+  assert.match(result, /not registered/i);
+  assert.match(result, /platform/i);
+  assert.match(result, /take priority over any other tool list/i);
+});
+
+test("serializeToolsToPrompt explicitly denies a separate/duplicate session or routing path", () => {
+  const result = serializeToolsToPrompt(TOOLS);
+  assert.match(result, /only one execution environment/i);
+});
+
 // ─── prepareToolMessages — hardened variant ──────────────────────────────────
 
 test("prepareToolMessages appends the full contract after client messages (#7679)", () => {
