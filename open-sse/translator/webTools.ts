@@ -143,6 +143,23 @@ function levenshteinDistance(a: string, b: string): number {
   return previous[b.length];
 }
 
+// #adapta-bash-refusal: live trials against adapta-web (Claude 5.5 Sonnet, Kimi K2.7
+// Code) with an otherwise-IDENTICAL function (same description, same parameters) showed
+// ~0% tool_calls success for the declared name "bash" vs ~100% for "terminal"/"shell" —
+// a refusal specific to that one literal name (likely an alignment reflex against
+// claiming genuine shell access), not to shell-command tools in general. The contract
+// shows this softer alias instead of the real name for the affected tool(s); the model
+// may still emit either spelling, so parseToolCallsFromText resolves both back to the
+// real requested name (see resolveRequestedToolName below).
+const TOOL_NAME_DISPLAY_ALIASES: Record<string, string> = {
+  bash: "terminal",
+};
+
+/** The name shown to the model in the <tool> contract for a given real tool name. */
+function displayToolName(name: string): string {
+  return TOOL_NAME_DISPLAY_ALIASES[name.toLowerCase()] ?? name;
+}
+
 function scoreToolName(emitted: string, requested: RequestedToolName): number {
   if (emitted === requested.original) return 1;
   const normalized = normalizeToolName(emitted);
@@ -180,10 +197,24 @@ export function resolveRequestedToolName(
     }
   }
 
-  if (!best || best.score < 0.72) return null;
-  // Avoid correcting to an arbitrary tool when the fuzzy match is ambiguous.
-  if (best.score < 0.98 && best.score - secondBest < 0.08) return null;
-  return best.name;
+  if (best && best.score >= 0.72 && !(best.score < 0.98 && best.score - secondBest < 0.08)) {
+    return best.name;
+  }
+
+  // No confident fuzzy/exact match — fall back to the explicit display-alias reverse
+  // map (#adapta-bash-refusal). A model that saw "terminal" in the contract (our
+  // softened alias for the real tool "bash") may still emit "terminal" in its <tool>
+  // call; resolve it to the real requested name so the caller (e.g. OpenCode) gets the
+  // function name it actually dispatches on. A genuinely-requested tool literally named
+  // "terminal" would already have matched above and never reach this fallback.
+  const emittedLower = emitted.toLowerCase();
+  for (const requested of requestedTools) {
+    if (TOOL_NAME_DISPLAY_ALIASES[requested.original.toLowerCase()] === emittedLower) {
+      return requested.original;
+    }
+  }
+
+  return null;
 }
 
 function stripCodeFence(value: string): string {
@@ -504,7 +535,7 @@ export function serializeToolsToPrompt(tools: unknown): string {
       params = "";
     }
     lines.push(
-      `- ${fn.name}${desc ? `: ${desc}` : ""}${params ? `\n  parameters: ${params}` : ""}`
+      `- ${displayToolName(fn.name)}${desc ? `: ${desc}` : ""}${params ? `\n  parameters: ${params}` : ""}`
     );
   }
 

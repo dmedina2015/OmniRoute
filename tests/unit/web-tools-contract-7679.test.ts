@@ -98,6 +98,64 @@ test("serializeToolsToPrompt explicitly denies a separate/duplicate session or r
   assert.match(result, /only one execution environment/i);
 });
 
+// ─── serializeToolsToPrompt / parseToolCallsFromText — "bash" display alias ────────────
+// #adapta-bash-refusal: back-to-back live trials against adapta-web (Claude 5.5 Sonnet)
+// with an IDENTICAL function (same description, same parameters) showed ~0% tool_calls
+// success for the declared name "bash" vs ~100% for "terminal"/"shell" — a refusal
+// specific to that one literal tool name, not to shell-command tools in general. The
+// contract shows "terminal" for a tool named "bash"; the parser must still resolve either
+// spelling back to the real requested name "bash" so the caller (e.g. OpenCode) gets the
+// function name it actually dispatches on.
+const BASH_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Execute a shell command in the project directory",
+      parameters: { type: "object", properties: { command: { type: "string" } } },
+    },
+  },
+];
+
+test("serializeToolsToPrompt displays 'terminal' instead of 'bash' in the tool list", () => {
+  const result = serializeToolsToPrompt(BASH_TOOLS);
+  assert.match(result, /^- terminal:/m);
+  assert.doesNotMatch(result, /^- bash:/m);
+});
+
+test("parseToolCallsFromText resolves the model emitting the 'terminal' alias back to the real 'bash' name", () => {
+  const text = '<tool>{"name":"terminal","arguments":{"command":"ls -la"}}</tool>';
+  const { toolCalls } = parseToolCallsFromText(text, "call", BASH_TOOLS);
+  assert.ok(toolCalls && toolCalls.length === 1);
+  assert.equal(toolCalls[0].function.name, "bash", "the real requested name must reach the caller");
+});
+
+test("parseToolCallsFromText still resolves the model emitting the real 'bash' name directly (no regression)", () => {
+  const text = '<tool>{"name":"bash","arguments":{"command":"ls -la"}}</tool>';
+  const { toolCalls } = parseToolCallsFromText(text, "call", BASH_TOOLS);
+  assert.ok(toolCalls && toolCalls.length === 1);
+  assert.equal(toolCalls[0].function.name, "bash");
+});
+
+test("the 'terminal' alias does not hijack a genuinely different tool literally named 'terminal'", () => {
+  const tools = [
+    ...BASH_TOOLS,
+    {
+      type: "function",
+      function: {
+        name: "terminal",
+        description: "Open an interactive terminal pane (unrelated to bash)",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+  ];
+  const text = '<tool>{"name":"terminal","arguments":{}}</tool>';
+  const { toolCalls } = parseToolCallsFromText(text, "call", tools);
+  assert.ok(toolCalls && toolCalls.length === 1);
+  // An exact match against a genuinely requested "terminal" tool wins over the alias.
+  assert.equal(toolCalls[0].function.name, "terminal");
+});
+
 // ─── prepareToolMessages — hardened variant ──────────────────────────────────
 
 test("prepareToolMessages appends the full contract after client messages (#7679)", () => {
