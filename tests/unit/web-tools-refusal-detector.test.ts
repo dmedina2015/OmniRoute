@@ -88,6 +88,28 @@ test("looksLikeToolRefusal does not flag prose that merely mentions tools", () =
   );
 });
 
+// Second wave of live captures (same VPS run, after the first wave of patterns landed).
+// These use yet other denial shapes: "não tem acesso a" (have-not vs there-is-not),
+// a backtick-quoted tool name ("a ferramenta `terminal` não está disponível"), and
+// "ferramenta indisponível" / "não chegou a rodar".
+test("looksLikeToolRefusal flags the second wave of live-captured adapts refusals", () => {
+  const liveRefusals = [
+    "Não consigo listar os arquivos do diretório: este ambiente não tem acesso a terminal ou sistema de arquivos. As ferramentas disponíveis aqui são de pesquisa web, geração de conteúdo (documentos, planilhas, apresentações, imagens, diagramas) e integrações com serviços externos.",
+    "Não consigo executar comandos de terminal nesta conversa — a ferramenta `terminal` não está disponível neste ambiente. O que tenho aqui são ferramentas da plataforma (pesquisa web, geração de documentos, planilhas, imagens, apresentações, diagramas, integrações e skills).",
+    "Não consigo listar os arquivos do diretório: nesta conversa não tenho ferramenta de terminal disponível. As ferramentas que tenho aqui são de pesquisa web, geração de documentos/planilhas/imagens/apresentações e integrações com apps externos — nenhuma executa comandos no seu sistema de arquivos.",
+    "Não consigo executar comandos de terminal nesta conversa — na prática, o comando `ls` não chegou a rodar e voltou como ferramenta indisponível. As ferramentas realmente ativas aqui são as da plataforma (pesquisa web, análise de arquivos, geração de documentos/planilhas/apresentações, conectores).",
+    "Não consigo executar comandos de terminal nesta conversa — a ferramenta `terminal` não está disponível no ambiente em que estou rodando aqui. A chamada falhou com erro de ferramenta indisponível, então a listagem de arquivos do diretório atual não pôde ser feita.",
+  ];
+
+  for (const refusal of liveRefusals) {
+    assert.equal(
+      looksLikeToolRefusal(refusal),
+      true,
+      `live-captured refusal was not detected: ${refusal.slice(0, 80)}`
+    );
+  }
+});
+
 // #adapta-refusal-retry-live: the refusals below were captured VERBATIM from live
 // adapta-web (Kimi K2.7 Code) tool-aware calls against the VPS. The first version of
 // the detector matched only 1 of 8 — the denial is phrased around the ACTION ("não

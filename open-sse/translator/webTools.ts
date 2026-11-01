@@ -712,7 +712,10 @@ const TOOL_REFUSAL_DENIAL_PATTERNS: RegExp[] = [
   // distinct denial and must not be retried as if it were a final answer.
   /\bn[aã]o\s+(?:consigo|conseguo|posso|consegue|consegui|conseguiu)\s+(?:executar|rodar|chamar|invocar|usar)\b/i,
   /\bn[aã]o\s+(?:consigo|conseguo)\s+executar\s+(?:essa\s+|esta\s+|o\s+|um\s+|uma\s+)?(?:listagem|comando|ferramenta)\b/i,
-  /\bn[aã]o\s+(?:ha|há)\s+(?:acesso\s+)?(?:a|à)\s+(?:o\s+|a\s+|as\s+|terminal|shell|bash|sistema\s+de\s+arquivos|ferramentas?\s+de\s+arquivos)/i,
+  /\bn[aã]o\s+(?:ha|há|tem|t[eê]m)\s+(?:acesso\s+)?(?:a|à)\s+(?:o\s+|a\s+|as\s+|terminal|shell|bash|sistema\s+de\s+arquivos|ferramentas?\s+de\s+arquivos)/i,
+  /\bn[aã]o\s+(?:tenho|tem|t[eê]m)\s+(?:uma\s+|a\s+|ferramenta\s+de\s+|ferramenta\s+)?(?:terminal|shell|bash|ferramenta)\b/i,
+  /\bferramenta\s+indispon[ií]vel\b/i,
+  /\b(?:n[aã]o\s+)?chegou\s+a\s+rodar\b/i,
   /\b(?:esta\s+|essa\s+|nesta\s+)?(?:sess[aã]o|conversa|ambiente|chat)\s+n[aã]o\s+(?:tem|possui|exp[oõ]e|oferece)\b/i,
   /\b(?:ambiente|chat|sess[aã]o)\s+(?:dispon[ií]vel|aqui\s+nesta\s+sess[aã]o)\s+n[aã]o\s+exp[oõ]e\b/i,
   /\bn[aã]o\s+exp[oõ]e\s+(?:essa\s+|a\s+|o\s+)?(?:ferramenta|terminal|shell|bash|acesso)/i,
