@@ -689,17 +689,36 @@ const TOOL_REFUSAL_DENIAL_PATTERNS: RegExp[] = [
   /\b(?:tool|terminal|shell|bash|command|function)s?\s+(?:are|is)\s+(?:not\s+(?:available|registered|exposed|enabled|active)|unavailable|inactive)\b/i,
   /\bnot\s+(?:actually\s+)?(?:registered|enabled|exposed|available)\s+(?:here|in\s+this\s+(?:session|conversation|chat|environment))\b/i,
   /\b(?:cannot|can't|unable\s+to)\s+(?:call|invoke|run|execute|use)\s+(?:a\s+|the\s+|any\s+|your\s+)?(?:tool|terminal|shell|bash|command|function)/i,
+  /\b(?:i\s+)?(?:cannot|can't|unable\s+to)\s+execute\s+(?:that\s+|this\s+|the\s+|a\s+)?(?:command|listing|tool\s+call|shell\s+command)\b/i,
+  /\b(?:this\s+|the\s+|that\s+)?(?:session|conversation|environment|chat)\s+(?:has|have)\s+no\s+access\s+to\b/i,
+  /\b(?:this\s+|the\s+|that\s+)?(?:session|conversation|environment|chat)\s+(?:does\s+not|doesn't|do\s+not|don't)\s+(?:expose|provide|include|offer)\b/i,
+  /\bno\s+shell\s+(?:access|available)\b/i,
+  /\bno\s+filesystem\s+(?:access|available)\b/i,
+  /\b(?:the\s+)?(?:tools|features)\s+(?:actually\s+)?(?:available|linked)\s+(?:here|to\s+this\s+(?:session|chat|conversation))\b/i,
   /\b(?:only|just)\s+the\s+platform(?:-level)?\s+(?:tool\s+)?(?:catalog|tools?|registry)\s+(?:is\s+)?(?:active|available|registered)/i,
   /\b(?:platform(?:-level)?|built-in)\s+(?:tool\s+)?(?:catalog|tools?|registry)\s+(?:is\s+)?(?:the\s+only\s+one\s+)?(?:active|available|registered)\b/i,
   /\btool(?:s)?\s+(?:da|do)\s+plataforma\b/i,
   /\bapenas\s+(?:as\s+)?ferramentas\s+d[aao]\s+plataforma\b/i,
-  /\bn[aã]o\s+(?:tenho|possui|possuo)\s+acesso\s+a\b/i,
   /\b(?:n[aã]o\s+(?:tenho|possuo)\s+acesso|acesso\s+n[aã]o\s+(?:dispon[ií]vel|permitido)|sem\s+acesso)\b/i,
   /\b(?:terminal|shell|bash|ferramentas?|ferramenta)\s+n[aã]o\s+(?:est[aá]\s+)?(?:dispon[ií]vel|registrad[oa]|ativ[oa]|habilitad[oa])/i,
   /\b(?:sess[aã]o|conversa)\s+duplicada\b/i,
   /\b(?:sess[aã]o|conversa)\s+(?:separada|outra)\b/i,
   /\bexecu[cç][aã]o\s+(?:aconteceu|ocorreu)\s+em\s+outro\s+ambiente\b/i,
   /\b(?:duplicate|duplicated|second|separate|other)\s+session\b/i,
+  // Live-captured PT dialects (adapta-web / Kimi K2.7 Code). The upstream refuses by
+  // saying it CANNOT EXECUTE the command or that the ENVIRONMENT does not expose the
+  // tool / shell / filesystem — a denial phrased around the action rather than around
+  // "access to" the tool. Captured verbatim from live refusals; each form below is a
+  // distinct denial and must not be retried as if it were a final answer.
+  /\bn[aã]o\s+(?:consigo|conseguo|posso|consegue|consegui|conseguiu)\s+(?:executar|rodar|chamar|invocar|usar)\b/i,
+  /\bn[aã]o\s+(?:consigo|conseguo)\s+executar\s+(?:essa\s+|esta\s+|o\s+|um\s+|uma\s+)?(?:listagem|comando|ferramenta)\b/i,
+  /\bn[aã]o\s+(?:ha|há)\s+(?:acesso\s+)?(?:a|à)\s+(?:o\s+|a\s+|as\s+|terminal|shell|bash|sistema\s+de\s+arquivos|ferramentas?\s+de\s+arquivos)/i,
+  /\b(?:esta\s+|essa\s+|nesta\s+)?(?:sess[aã]o|conversa|ambiente|chat)\s+n[aã]o\s+(?:tem|possui|exp[oõ]e|oferece)\b/i,
+  /\b(?:ambiente|chat|sess[aã]o)\s+(?:dispon[ií]vel|aqui\s+nesta\s+sess[aã]o)\s+n[aã]o\s+exp[oõ]e\b/i,
+  /\bn[aã]o\s+exp[oõ]e\s+(?:essa\s+|a\s+|o\s+)?(?:ferramenta|terminal|shell|bash|acesso)/i,
+  /\bn[aã]o\s+h[aá]\s+(?:acesso\s+)?a\s+(?:ferramentas?|terminal|shell|bash|sistema\s+de\s+arquivos)\b/i,
+  /\b(?:as\s+)?ferramentas\s+(?:reaismente\s+|de\s+)?(?:dispon[ií]ve[l]?s?|ligadas?)\s+(?:aqui|s[aã]o|s[oõ]\s+)?/i,
+  /\bn[aã]o\s+consigo\s+(?:ler|listar|abrir)\s+(?:o\s+|a\s+|arquivos|diret[oó]rio)/i,
 ];
 
 /**

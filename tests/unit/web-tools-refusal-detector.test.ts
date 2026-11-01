@@ -87,3 +87,30 @@ test("looksLikeToolRefusal does not flag prose that merely mentions tools", () =
     false
   );
 });
+
+// #adapta-refusal-retry-live: the refusals below were captured VERBATIM from live
+// adapta-web (Kimi K2.7 Code) tool-aware calls against the VPS. The first version of
+// the detector matched only 1 of 8 — the denial is phrased around the ACTION ("não
+// consigo executar", "o ambiente não expõe") rather than around "access to the tool",
+// so the English-centric patterns missed almost every live refusal. Each string here is
+// a verbatim capture; the detector must flag all of them or the retry never fires.
+test("looksLikeToolRefusal flags the refusals captured live from adapta-web", () => {
+  const liveRefusals = [
+    "Não consigo executar comandos de terminal nesta sessão — o ambiente disponível aqui não expõe essa ferramenta, então não tenho como rodar `ls` nem ler o diretório atual.\n\nO que posso fazer no lugar:\n\n- **Se você colar a saída do `ls`** (ou de `ls -la`, `tree -L 2`), eu analiso.",
+    "Não consigo executar comandos de terminal nesta conversa. Aqui eu rodo como a interface de chat do Adapta ONE, e as ferramentas ligadas a este chat são as de pesquisa na web, análise/geração de arquivos (planilhas, PDFs, documentos), imagens, apresentações e integrações com serviços externos — não há acesso a shell nem ao sistema de arquivos da sua máquina.",
+    "Não consigo executar comandos de terminal nesta conversa — a ferramenta não está disponível no ambiente atual.",
+    "O ambiente desta conversa não tem acesso a terminal, shell ou sistema de arquivos — as ferramentas disponíveis são as da plataforma Adapta ONE (pesquisa web, geração de documentos, planilhas, apresentações, imagens, diagramas, integrações e cursos).",
+    "Não consigo executar essa listagem aqui.",
+    "Não consigo executar comandos de terminal nesta sessão. As ferramentas realmente disponíveis aqui são as de pesquisa e geração (busca web, documentos, planilhas, apresentações, imagens, entre outras) — não há ferramenta de sistema de arquivos ou shell ativa.",
+    "Não consegui executar o comando: esta sessão não tem acesso ao terminal nem a ferramentas de arquivos (leitura, escrita, `bash`, `glob` ou `grep`).",
+    "Não consegui executar o comando de terminal: o ambiente retornou que a ferramenta `terminal` deu erro",
+  ];
+
+  for (const refusal of liveRefusals) {
+    assert.equal(
+      looksLikeToolRefusal(refusal),
+      true,
+      `live-captured refusal was not detected: ${refusal.slice(0, 80)}`
+    );
+  }
+});
