@@ -1,5 +1,5 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import { prepareToolMessages } from "../translator/webTools.ts";
+import { prepareToolMessages, looksLikeToolRefusal } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 
@@ -10,6 +10,15 @@ const ADAPTA_PUBLIC_STREAM_ERROR = `\n\n[Erro: ${sanitizeErrorMessage("Adapta up
 
 // Default model key in Adapta's catalog (auto-select).
 const DEFAULT_MODEL_KEY = "ONE";
+
+// #adapta-refusal-retry: Adapta's web models are non-deterministic enough that a single
+// tool-aware call succeeds only ~40-70% of the time depending on the tool — the rest of
+// the time the model replies with a plain-text refusal ("I don't have access to the
+// terminal", "only the platform catalog is active") instead of a <tool> block. Because
+// agentic tasks compose multiplicatively (5 steps at 60%/step ≈ 17% end-to-end), a
+// bounded in-provider retry turns a ~60% per-step success into ~94%. Mirrors the
+// established bounded-retry pattern in deepseek-web.ts (MAX_TOOL_PARSE_ATTEMPTS).
+const ADAPTA_MAX_REFUSAL_RETRIES = 3;
 
 // Map from OmniRoute model IDs to Adapta catalog model keys.
 export const MODEL_KEY_MAP: Record<string, string> = {
@@ -593,12 +602,64 @@ export class AdaptaWebExecutor extends BaseExecutor {
     );
 
     // 3. Fire request
-    const resp = await fetch(ADAPTA_STREAM_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestPayload),
-      signal: signal ?? undefined,
-    });
+    //
+    // #adapta-refusal-retry: a tool-aware call to Adapta succeeds only ~40-70% of the
+    // time — the failure mode is a plain-text refusal instead of a <tool> block, which
+    // used to be returned to the client as if it were a final answer, stalling the
+    // agentic loop. When tools are in play, a refused reply is therefore retried
+    // upstream (bounded), because the upstream is non-deterministic and asking again
+    // usually just works.
+    const fireRequest = async (): Promise<Response> =>
+      fetch(ADAPTA_STREAM_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestPayload),
+        signal: signal ?? undefined,
+      });
+
+    /** Drain an upstream SSE response down to its concatenated text. */
+    const collectText = async (
+      body: ReadableStream
+    ): Promise<{ text: string; error: string | null }> => {
+      const decoder = new TextDecoder();
+      const reader = body.getReader();
+      let buf = "";
+      let fullText = "";
+      let upstreamErrorMessage: string | null = null;
+
+      try {
+        readLoop: while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === "text-delta" && ev.id !== "quick-response") {
+                fullText += String(ev.delta ?? "");
+              } else if (ev.type === "error") {
+                upstreamErrorMessage = "Adapta upstream error";
+                break readLoop;
+              }
+            } catch {
+              // skip
+            }
+          }
+        }
+      } finally {
+        if (upstreamErrorMessage) {
+          void reader.cancel("Adapta upstream SSE error").catch(() => undefined);
+        }
+        reader.releaseLock();
+      }
+
+      return { text: fullText, error: upstreamErrorMessage };
+    };
+
+    const resp = await fireRequest();
 
     if (!resp.ok) {
       let errMsg = `Adapta error HTTP ${resp.status}`;
@@ -648,44 +709,11 @@ export class AdaptaWebExecutor extends BaseExecutor {
 
     // Collect all text-delta events (used for: non-streaming requests, and any
     // tool-aware request regardless of its requested stream mode).
-    const decoder = new TextDecoder();
-    const reader = resp.body!.getReader();
-    let buf = "";
-    let fullText = "";
-    let upstreamErrorMessage: string | null = null;
+    let collected = await collectText(resp.body!);
 
-    try {
-      readLoop: while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const ev = JSON.parse(line.slice(6));
-            if (ev.type === "text-delta" && ev.id !== "quick-response") {
-              fullText += String(ev.delta ?? "");
-            } else if (ev.type === "error") {
-              upstreamErrorMessage = "Adapta upstream error";
-              break readLoop;
-            }
-          } catch {
-            // skip
-          }
-        }
-      }
-    } finally {
-      if (upstreamErrorMessage) {
-        void reader.cancel("Adapta upstream SSE error").catch(() => undefined);
-      }
-      reader.releaseLock();
-    }
-
-    if (upstreamErrorMessage) {
+    if (collected.error) {
       return {
-        response: new Response(JSON.stringify(buildErrorBody(502, upstreamErrorMessage)), {
+        response: new Response(JSON.stringify(buildErrorBody(502, collected.error)), {
           status: 502,
           headers: { "Content-Type": "application/json" },
         }),
@@ -696,6 +724,46 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     if (hasTools) {
+      // Retry loop for a refused tool-aware reply. A refusal is detected on the RAW text
+      // (before parsing): a reply that refuses produced no <tool> block at all, so there is
+      // nothing for the parser to recover. A legitimate final answer (the model really
+      // answered, no tool needed) is NOT a refusal and must never be retried — retrying it
+      // would burn an upstream call and could replace a correct answer with a worse one.
+      let fullText = collected.text;
+      let attempts = 0;
+      while (attempts < ADAPTA_MAX_REFUSAL_RETRIES && looksLikeToolRefusal(fullText)) {
+        attempts += 1;
+        log?.warn?.(
+          "ADAPTA-WEB",
+          `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES}) — retrying upstream`
+        );
+        const retryResp = await fireRequest();
+        if (!retryResp.ok) {
+          // An HTTP-level failure on retry is surfaced as-is rather than silently
+          // degrading to the refused text the client already rejected.
+          log?.warn?.("ADAPTA-WEB", `Adapta retry failed with HTTP ${retryResp.status}`);
+          return {
+            response: makeErrorResponse(retryResp.status, `Adapta error HTTP ${retryResp.status}`),
+            url: ADAPTA_STREAM_URL,
+            headers,
+            transformedBody: requestPayload,
+          };
+        }
+        const retryCollected = await collectText(retryResp.body!);
+        if (retryCollected.error) {
+          return {
+            response: new Response(JSON.stringify(buildErrorBody(502, retryCollected.error)), {
+              status: 502,
+              headers: { "Content-Type": "application/json" },
+            }),
+            url: ADAPTA_STREAM_URL,
+            headers,
+            transformedBody: requestPayload,
+          };
+        }
+        fullText = retryCollected.text;
+      }
+
       const bufferedJson = new Response(
         JSON.stringify({
           id: `chatcmpl-adp-${Date.now()}`,
@@ -731,7 +799,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: fullText },
+              message: { role: "assistant", content: collected.text },
               finish_reason: "stop",
             },
           ],

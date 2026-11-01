@@ -664,6 +664,77 @@ export function parseToolCallsFromText(
   return { content, toolCalls };
 }
 
+// ── Tool-refusal detection ───────────────────────────────────────────────────
+
+/**
+ * Patterns for a reply that REFUSES to act instead of emitting a `<tool>` block.
+ *
+ * #adapta-refusal-retry: live trials against adapta-web (Claude 5.5 Sonnet, Kimi K2.7
+ * Code) showed a single tool-aware call succeeds only ~40-70% of the time depending on
+ * the tool; the failure mode is a plain-text refusal ("I don't have access to the
+ * terminal", "only the platform catalog is active here", "this looks like a duplicate
+ * session") rather than a malformed envelope. A refusal is not a legitimate final
+ * answer — the client asked for a tool call — so it is a retryable outcome, and a
+ * retry usually succeeds because the upstream is non-deterministic.
+ *
+ * Deliberately narrow: only phrases that clearly deny tool access or misdescribe the
+ * tool registry. A normal answer that merely mentions a file, a line count, or a
+ * completed action must NOT match — otherwise legitimate final answers would be
+ * retried and could be replaced by a worse one.
+ */
+const TOOL_REFUSAL_DENIAL_PATTERNS: RegExp[] = [
+  /\b(?:i|we)\s+(?:do(?:n't| not)|cannot|can't|cant)\s+have\s+access\b/i,
+  /\b(?:i|we)\s+(?:do(?:n't| not)|cannot|can't|cant)\s+(?:have\s+)?access\s+to\b/i,
+  /\bno\s+access\s+to\s+(?:the\s+|any\s+|these\s+|your\s+)?(?:tool|terminal|shell|bash|command|function|client)\b/i,
+  /\b(?:tool|terminal|shell|bash|command|function)s?\s+(?:are|is)\s+(?:not\s+(?:available|registered|exposed|enabled|active)|unavailable|inactive)\b/i,
+  /\bnot\s+(?:actually\s+)?(?:registered|enabled|exposed|available)\s+(?:here|in\s+this\s+(?:session|conversation|chat|environment))\b/i,
+  /\b(?:cannot|can't|unable\s+to)\s+(?:call|invoke|run|execute|use)\s+(?:a\s+|the\s+|any\s+|your\s+)?(?:tool|terminal|shell|bash|command|function)/i,
+  /\b(?:only|just)\s+the\s+platform(?:-level)?\s+(?:tool\s+)?(?:catalog|tools?|registry)\s+(?:is\s+)?(?:active|available|registered)/i,
+  /\b(?:platform(?:-level)?|built-in)\s+(?:tool\s+)?(?:catalog|tools?|registry)\s+(?:is\s+)?(?:the\s+only\s+one\s+)?(?:active|available|registered)\b/i,
+  /\btool(?:s)?\s+(?:da|do)\s+plataforma\b/i,
+  /\bapenas\s+(?:as\s+)?ferramentas\s+d[aao]\s+plataforma\b/i,
+  /\bn[aã]o\s+(?:tenho|possui|possuo)\s+acesso\s+a\b/i,
+  /\b(?:n[aã]o\s+(?:tenho|possuo)\s+acesso|acesso\s+n[aã]o\s+(?:dispon[ií]vel|permitido)|sem\s+acesso)\b/i,
+  /\b(?:terminal|shell|bash|ferramentas?|ferramenta)\s+n[aã]o\s+(?:est[aá]\s+)?(?:dispon[ií]vel|registrad[oa]|ativ[oa]|habilitad[oa])/i,
+  /\b(?:sess[aã]o|conversa)\s+duplicada\b/i,
+  /\b(?:sess[aã]o|conversa)\s+(?:separada|outra)\b/i,
+  /\bexecu[cç][aã]o\s+(?:aconteceu|ocorreu)\s+em\s+outro\s+ambiente\b/i,
+  /\b(?:duplicate|duplicated|second|separate|other)\s+session\b/i,
+];
+
+/**
+ * Patterns for a reply that STATES an intent to call a tool but never emitted the
+ * `<tool>` block. The model announced the action ("Let me run the tests first.",
+ * "Vou criar o arquivo agora.") and then stopped — the client sees a promise, not a
+ * tool call, and the agentic loop stalls. Retryable for the same reason a refusal is.
+ */
+const TOOL_REFUSAL_STATED_INTENT_PATTERNS: RegExp[] = [
+  /^\s*(?:ok(?:ay)?|alright|sure|got\s+it|understood)[.,!\s-]+(?:i(?:'|’)?ll|i\s+will|let\s+me|now)\b/i,
+  /^\s*(?:i(?:'|’)?ll|i\s+will|let\s+me|now)\s+(?:create|criar|run|executar|execute|write|escrever|generate|gerar|read|ler|list|listar|call|chamar|use|usar|search|buscar|open|abrir|edit|editar|delete|apagar|check|verificar)\b/i,
+  /^\s*vou\s+(?:criar|executar|escrever|gerar|ler|listar|chamar|usar|buscar|abrir|editar|apagar|verificar)\b/i,
+  /^\s*let\s+me\s+(?:create|run|execute|write|generate|read|list|call|use|search|open|edit|delete|check)\b/i,
+  /^\s*(?:first|primeiro)(?:\s*,)?\s+(?:i(?:'|’)?ll|let\s+me|vou)\b/i,
+];
+
+/**
+ * Detect a reply that declines (or merely promises) to invoke a client tool instead
+ * of emitting a `<tool>` block.
+ *
+ * Returns false for empty text and for ordinary final answers. Callers use this to
+ * decide whether an upstream attempt should be retried — NOT to alter the text the
+ * client sees.
+ */
+export function looksLikeToolRefusal(text: string | null | undefined): boolean {
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  if (TOOL_REFUSAL_DENIAL_PATTERNS.some((re) => re.test(trimmed))) return true;
+  if (TOOL_REFUSAL_STATED_INTENT_PATTERNS.some((re) => re.test(trimmed))) return true;
+
+  return false;
+}
+
 // ── Shared helpers for web-cookie executors ────────────────────────────────
 
 interface ToolPrepResult {

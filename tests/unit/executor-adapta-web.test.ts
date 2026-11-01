@@ -264,6 +264,161 @@ describe("AdaptaWebExecutor", () => {
     }
   });
 
+  // #adapta-refusal-retry: a tool-aware turn whose reply is a refusal (rather than a
+  // <tool> block) used to be final. Because a single Adapta call only succeeds ~40-70% of
+  // the time depending on the tool, that made multi-step agentic tasks fail multiplicatively.
+  // execute() now retries a refused reply upstream, so a refuse-then-good sequence must
+  // still end as a real tool_calls turn for the client.
+  it("retries a refused tool reply and surfaces the subsequent real tool call", async () => {
+    const originalFetch = globalThis.fetch;
+    let streamCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.refusal-retry-test.jwt" });
+      }
+      streamCalls += 1;
+      const delta =
+        streamCalls === 1
+          ? "I don't have access to the terminal in this environment, so I cannot run that command."
+          : '<tool>{"name":"write","arguments":{"path":"daniel.txt","content":"oi"}}</tool>';
+      const sse =
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta })}\n\n` +
+        `data: ${JSON.stringify({ type: "done" })}\n\n`;
+      return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: false,
+        body: {
+          messages: [{ role: "user", content: "Crie o arquivo daniel.txt" }],
+          tools: [
+            {
+              type: "function",
+              function: { name: "write", parameters: { type: "object", properties: {} } },
+            },
+          ],
+        },
+        credentials: { apiKey: "__client=unique-refusal-retry-cookie" },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 200);
+      assert.equal(streamCalls, 2, "the refused reply must trigger exactly one retry");
+      const json = await result.response.json();
+      const choice = json.choices[0];
+      assert.equal(choice.finish_reason, "tool_calls");
+      assert.equal(choice.message.tool_calls[0].function.name, "write");
+      assert.match(choice.message.tool_calls[0].function.arguments, /daniel\.txt/);
+      assert.doesNotMatch(String(choice.message.content ?? ""), /don't have access/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // A legitimate final answer is NOT a refusal. Retrying it would burn an extra upstream
+  // call and could replace a correct answer with a different one, so execute() must leave
+  // it alone and return after the first attempt.
+  it("does not retry a legitimate tool-less final answer", async () => {
+    const originalFetch = globalThis.fetch;
+    let streamCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.no-retry-final-test.jwt" });
+      }
+      streamCalls += 1;
+      const sse =
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta: "O arquivo tem 412 linhas." })}\n\n` +
+        `data: ${JSON.stringify({ type: "done" })}\n\n`;
+      return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: false,
+        body: {
+          messages: [{ role: "user", content: "Quantas linhas tem o arquivo?" }],
+          tools: [
+            {
+              type: "function",
+              function: { name: "write", parameters: { type: "object", properties: {} } },
+            },
+          ],
+        },
+        credentials: { apiKey: "__client=unique-no-retry-cookie" },
+        signal: null,
+      });
+
+      assert.equal(result.response.status, 200);
+      assert.equal(streamCalls, 1, "a legitimate final answer must not be retried");
+      const json = await result.response.json();
+      assert.equal(json.choices[0].finish_reason, "stop");
+      assert.match(String(json.choices[0].message.content), /412 linhas/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // Bounded, not infinite: a model that refuses every single time must stop after
+  // ADAPTA_MAX_REFUSAL_RETRIES attempts instead of stalling the client forever.
+  it("stops retrying after the configured attempt cap when every reply is a refusal", async () => {
+    const originalFetch = globalThis.fetch;
+    let streamCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) {
+        return Response.json({ jwt: "eyJ.refusal-exhausted-test.jwt" });
+      }
+      streamCalls += 1;
+      const sse =
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta: "I don't have access to the terminal here." })}\n\n` +
+        `data: ${JSON.stringify({ type: "done" })}\n\n`;
+      return new Response(sse, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    try {
+      const executor = new mod.AdaptaWebExecutor();
+      const result = await executor.execute({
+        model: "adapta-kimi-k2-7-code",
+        stream: false,
+        body: {
+          messages: [{ role: "user", content: "Crie o arquivo daniel.txt" }],
+          tools: [
+            {
+              type: "function",
+              function: { name: "write", parameters: { type: "object", properties: {} } },
+            },
+          ],
+        },
+        credentials: { apiKey: "__client=unique-refusal-exhausted-cookie" },
+        signal: null,
+      });
+
+      // 1 initial attempt + 3 retries = 4 upstream calls, then stop.
+      assert.equal(streamCalls, 4);
+      assert.equal(result.response.status, 200);
+      const json = await result.response.json();
+      assert.equal(json.choices[0].finish_reason, "stop");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   // #adapta-temporary-chat: iterating through an agentic client (OpenCode, curl tests, etc.)
   // sends one Adapta chat per turn, each one permanently polluting the user's
   // agent.adapta.one web history — the conversation is already persisted on the client's own
