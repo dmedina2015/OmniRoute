@@ -635,6 +635,86 @@ function resolveShellToolName(requestedTools: unknown): string {
   return "bash";
 }
 
+/** Check if a requested tool with the given name exists. */
+function hasTool(requestedTools: unknown, name: string): boolean {
+  const names = getRequestedToolNames(requestedTools);
+  const target = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return names.some((r) => r.original.toLowerCase().replace(/[^a-z0-9]/g, "") === target);
+}
+
+/** Get the original tool name from requested tools (case-preserving). */
+function getToolName(requestedTools: unknown, name: string): string {
+  const names = getRequestedToolNames(requestedTools);
+  const target = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const match = names.find((r) => r.original.toLowerCase().replace(/[^a-z0-9]/g, "") === target);
+  return match ? match.original : name;
+}
+
+/**
+ * Classify a bash command and try to map it to a more specific tool.
+ * Returns { name, arguments } if a specific tool matches, or null to use bash.
+ *
+ * Conservative: only matches simple, single-tool commands without pipes,
+ * redirects (except simple >), subshells, or compound operators.
+ */
+function classifyBashCommand(
+  command: string,
+  requestedTools: unknown
+): { name: string; args: Record<string, unknown> } | null {
+  const cmd = command.trim();
+
+  // Reject complex commands: pipes, &&, ||, subshells, backticks, multiple redirects
+  if (/[|&;`$()]/.test(cmd)) return null;
+  // Reject commands with multiple redirects
+  if ((cmd.match(/>/g) || []).length > 1) return null;
+  if (cmd.includes(">>")) return null;
+
+  // ── read: cat <file> ─────────────────────────────────────────────────────
+  const catMatch = cmd.match(/^cat\s+(['"]?)(.+?)\1\s*$/);
+  if (catMatch && hasTool(requestedTools, "read")) {
+    return { name: getToolName(requestedTools, "read"), args: { path: catMatch[2].trim() } };
+  }
+
+  // ── write: printf '...' > <file> or echo '...' > <file> ────────────────
+  const writeMatch = cmd.match(/^(?:printf|echo)\s+(['"])(.*?)\1\s*>\s*(\S+)\s*$/);
+  if (writeMatch && hasTool(requestedTools, "write")) {
+    const content = writeMatch[2];
+    const path = writeMatch[3];
+    // Handle printf escape sequences: \n, \t, etc.
+    const unescaped = content.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\\\/g, "\\");
+    return { name: getToolName(requestedTools, "write"), args: { path, content: unescaped } };
+  }
+
+  // ── grep: grep <pattern> <file> or grep -n <pattern> <file> ─────────────
+  const grepMatch = cmd.match(/^grep\s+(?:-[a-zA-Z]+\s+)*(['"]?)(.+?)\1\s+(\S+)\s*$/);
+  if (grepMatch && hasTool(requestedTools, "grep")) {
+    return {
+      name: getToolName(requestedTools, "grep"),
+      args: { pattern: grepMatch[2].trim(), path: grepMatch[3].trim() },
+    };
+  }
+
+  // ── glob: find ... -name <pattern> ───────────────────────────────────────
+  const findMatch = cmd.match(/^find\s+\S+\s+-type\s+f\s+-name\s+(['"])(.+?)\1\s*$/);
+  if (findMatch && hasTool(requestedTools, "glob")) {
+    // Convert find pattern to glob pattern
+    const pattern = findMatch[2].replace(/^\.\//, "**/");
+    return { name: getToolName(requestedTools, "glob"), args: { pattern } };
+  }
+
+  // ── edit: sed -i 's/old/new/' <file> ─────────────────────────────────────
+  const sedMatch = cmd.match(/^sed\s+-i\s+['"]s\/(.+?)\/(.+?)\/[gims]*['"]\s+(\S+)\s*$/);
+  if (sedMatch && hasTool(requestedTools, "edit")) {
+    return {
+      name: getToolName(requestedTools, "edit"),
+      args: { path: sedMatch[3], old: sedMatch[1], new: sedMatch[2] },
+    };
+  }
+
+  // No specific tool match — use bash/terminal
+  return null;
+}
+
 export function parseToolCallsFromText(
   text: string,
   idSeed = "call",
@@ -678,16 +758,28 @@ export function parseToolCallsFromText(
   const toolCalls: OpenAIToolCall[] = [];
 
   if (bashMatches.length > 0) {
-    const shellToolName = resolveShellToolName(requestedTools);
     for (const bm of bashMatches) {
-      toolCalls.push({
-        id: `${idSeed}_${toolCalls.length}`,
-        type: "function",
-        function: {
-          name: shellToolName,
-          arguments: JSON.stringify({ command: bm.command }),
-        },
-      });
+      const classified = classifyBashCommand(bm.command, requestedTools);
+      if (classified) {
+        toolCalls.push({
+          id: `${idSeed}_${toolCalls.length}`,
+          type: "function",
+          function: {
+            name: classified.name,
+            arguments: JSON.stringify(classified.args),
+          },
+        });
+      } else {
+        const shellToolName = resolveShellToolName(requestedTools);
+        toolCalls.push({
+          id: `${idSeed}_${toolCalls.length}`,
+          type: "function",
+          function: {
+            name: shellToolName,
+            arguments: JSON.stringify({ command: bm.command }),
+          },
+        });
+      }
       acceptedRanges.push({ start: bm.start, end: bm.end });
     }
   }
