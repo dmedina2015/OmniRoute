@@ -40,12 +40,12 @@ describe("webTools — serializeToolsToPrompt", () => {
     assert.equal(serializeToolsToPrompt(undefined), "");
   });
 
-  test("lists each tool and explains the <tool> block contract with nonce binding", () => {
+  test("lists each tool and explains the bash block contract", () => {
     const prompt = serializeToolsToPrompt(WEATHER_TOOL);
     assert.ok(prompt.includes("Available tools:"));
     assert.ok(prompt.includes("- get_weather: Get the weather for a city"));
-    assert.ok(prompt.includes("<tool>"), "must teach the <tool> wrapper contract");
-    assert.ok(prompt.includes("_nonce"), "must include nonce binding instructions");
+    assert.ok(prompt.includes("fenced code block"), "must teach the bash block contract");
+    assert.ok(prompt.includes("language tag 'bash'"), "must include bash language tag");
   });
 });
 
@@ -235,7 +235,7 @@ describe("webTools — prepareToolMessages", () => {
     const latestContent = String(result.effectiveMessages[2].content);
     assert.ok(latestContent.startsWith("weather in Paris?\n\n[Client protocol reminder"));
     assert.ok(latestContent.includes("client-tool contract in the system instructions"));
-    assert.ok(latestContent.includes("block protocol: get_weather"));
+    assert.ok(latestContent.includes("code block protocol: get_weather"));
     assert.ok(latestContent.endsWith("]"));
     // the original array and its objects must not be mutated
     assert.equal(messages[2].content, "weather in Paris?");

@@ -28,7 +28,7 @@ test("serializeToolsToPrompt lists the tool and the <tool> invocation contract",
   const prompt = serializeToolsToPrompt(TOOLS);
   assert.ok(prompt.includes("get_weather"), "tool name present");
   assert.ok(prompt.includes("Get the current weather"), "tool description present");
-  assert.ok(prompt.includes("<tool>"), "invocation contract mentions the <tool> tag");
+  assert.ok(prompt.includes("fenced code block"), "invocation contract mentions the bash block");
 });
 
 test("serializeToolsToPrompt returns empty string for no tools", () => {

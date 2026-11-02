@@ -46,9 +46,10 @@ test("serializeToolsToPrompt states that client tools are available (#7679)", ()
   assert.match(result, /never claim they are unavailable/);
 });
 
-test("serializeToolsToPrompt includes the nonce-bound invocation contract (#7679)", () => {
+test("serializeToolsToPrompt includes the bash command invocation contract (#7679)", () => {
   const result = serializeToolsToPrompt(TOOLS);
-  assert.match(result, /secret binding "_nonce"/);
+  assert.match(result, /fenced code block/);
+  assert.match(result, /language tag 'bash'/);
 });
 
 test("serializeToolsToPrompt contains tool names from the input (#7679)", () => {
@@ -57,9 +58,10 @@ test("serializeToolsToPrompt contains tool names from the input (#7679)", () => 
   assert.match(result, /search_web/);
 });
 
-test("serializeToolsToPrompt contains the tag format example (#7679)", () => {
+test("serializeToolsToPrompt contains the bash block format example (#7679)", () => {
   const result = serializeToolsToPrompt(TOOLS);
-  assert.match(result, /<tool>\{"name": "<tool_name>"/);
+  assert.match(result, /language tag 'bash'/);
+  assert.match(result, /fenced code block/);
 });
 
 test("serializeToolsToPrompt returns empty string for empty tools (#7679)", () => {
@@ -170,7 +172,7 @@ test("prepareToolMessages appends the full contract after client messages (#7679
   const sysMsg = result.effectiveMessages[1];
   assert.equal(sysMsg.role, "system");
   assert.match(String(sysMsg.content), /never claim they are unavailable/);
-  assert.match(String(sysMsg.content), /secret binding "_nonce"/);
+  assert.match(String(sysMsg.content), /fenced code block/);
 });
 
 test("prepareToolMessages adds the client-tool contract (#7679)", () => {
