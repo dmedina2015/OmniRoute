@@ -47,7 +47,7 @@ function normalizeDsmlToolCalls(text: string): string {
     .replace(DSML_INVOKE_RE, (_match, _dsml: string, name: string, body: string) => {
       const parameters: Record<string, unknown> = {};
       const parameterRe =
-        /<(?:｜｜DSML｜｜|\|DSML\|)\s*parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)(?:<\/?(?:｜｜DSML｜｜|\|DSML\|)\s*parameter\s*>|(?=<(?:｜｜DSML｜｜|\|DSML\|)\s*parameter\s+name=|<\/(?:｜｜DSML｜｜|\|DSML\|)\s*invoke\s*>))/g;
+        /<(?:｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)(?:<\/?(?:｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*parameter\s*>|(?=<(?:｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*parameter\s+name=|<\/(?:｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*invoke\s*>))/g;
       let parameter: RegExpExecArray | null;
       while ((parameter = parameterRe.exec(body)) !== null) {
         const raw = parameter[2].trim();
@@ -599,7 +599,11 @@ export function serializeToolsToPrompt(tools: unknown): string {
  * omitted, ids are still unique within a single call (index-based).
  */
 // Regex for fenced code blocks with bash/sh/shell language tag.
-const BASH_BLOCK_RE = /```(?:bash|sh|shell)\s*\n([\s\S]*?)```/g;
+const BASH_BLOCK_RE = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]*?)```/g;
+
+// Regex for fenced code blocks WITHOUT a language tag (fallback).
+// Only used when no tagged blocks are found.
+const UNTAGGED_BLOCK_RE = /```\s*\n([\s\S]*?)```/g;
 
 /** Check if a requested tool name looks like a shell/terminal/execution tool. */
 function isShellTool(name: string): boolean {
@@ -726,87 +730,47 @@ export function parseToolCallsFromText(
   // Check if there are any parseable blocks.
   const hasBashBlock = typeof normalizedText === "string" && BASH_BLOCK_RE.test(normalizedText);
   BASH_BLOCK_RE.lastIndex = 0;
+  const hasUntaggedBlock =
+    typeof normalizedText === "string" && UNTAGGED_BLOCK_RE.test(normalizedText);
+  UNTAGGED_BLOCK_RE.lastIndex = 0;
   const hasToolTag =
     typeof normalizedText === "string" &&
     (normalizedText.includes("<tool>") || normalizedText.includes("<tool_call"));
 
-  if (typeof normalizedText !== "string" || (!hasBashBlock && !hasToolTag)) {
+  if (typeof normalizedText !== "string" || (!hasBashBlock && !hasUntaggedBlock && !hasToolTag)) {
     return { content: text ?? "", toolCalls: null };
   }
 
   const nonce = getToolNonce(requestedTools);
   const acceptedRanges: Array<{ start: number; end: number }> = [];
 
-  // ── Bash code block parsing (primary format for Adapta web-cookie) ────────
-  // The model generates ```bash blocks instead of <tool> blocks. Extract the
-  // command and convert to a tool_call. This has much higher success rate
-  // because the model is "generating text" not "calling a tool".
-  const bashMatches: Array<{ command: string; start: number; end: number }> = [];
-  let bashMatch: RegExpExecArray | null;
-  const bashRe = new RegExp(BASH_BLOCK_RE.source, BASH_BLOCK_RE.flags);
-  while ((bashMatch = bashRe.exec(normalizedText)) !== null) {
-    const command = bashMatch[1].trim();
-    if (command) {
-      bashMatches.push({
-        command,
-        start: bashMatch.index,
-        end: bashMatch.index + bashMatch[0].length,
-      });
-    }
-  }
-
   const toolCalls: OpenAIToolCall[] = [];
 
-  if (bashMatches.length > 0) {
-    for (const bm of bashMatches) {
-      const classified = classifyBashCommand(bm.command, requestedTools);
-      if (classified) {
-        toolCalls.push({
-          id: `${idSeed}_${toolCalls.length}`,
-          type: "function",
-          function: {
-            name: classified.name,
-            arguments: JSON.stringify(classified.args),
-          },
-        });
-      } else {
-        const shellToolName = resolveShellToolName(requestedTools);
-        toolCalls.push({
-          id: `${idSeed}_${toolCalls.length}`,
-          type: "function",
-          function: {
-            name: shellToolName,
-            arguments: JSON.stringify({ command: bm.command }),
-          },
-        });
-      }
-      acceptedRanges.push({ start: bm.start, end: bm.end });
-    }
+  // ── <tool> block parsing (primary — includes DSML normalized) ──────────
+  // Try <tool> blocks first. DSML blocks are normalized to <tool> by
+  // normalizeDsmlToolCalls() above. This is more precise than bash blocks
+  // because it contains the tool name and structured arguments.
+  const toolCandidates: ToolParseCandidate[] = [];
+  for (const block of [
+    ...findTagBlocks(normalizedText, TOOL_OPEN_RE, TOOL_CLOSE_RE),
+    ...findTagBlocks(normalizedText, TOOL_CALL_OPEN_RE, TOOL_CALL_CLOSE_RE),
+  ]) {
+    toolCandidates.push({
+      raw: block.inner.trim(),
+      start: block.start,
+      end: block.end,
+      requireRequestedTool: false,
+    });
   }
 
-  // ── <tool> block parsing (fallback for backward compat) ─────────────────
-  // Only parse <tool> blocks if no bash blocks were found.
-  if (bashMatches.length === 0) {
-    const toolCandidates: ToolParseCandidate[] = [];
-    for (const block of [
-      ...findTagBlocks(normalizedText, TOOL_OPEN_RE, TOOL_CLOSE_RE),
-      ...findTagBlocks(normalizedText, TOOL_CALL_OPEN_RE, TOOL_CALL_CLOSE_RE),
-    ]) {
-      toolCandidates.push({
-        raw: block.inner.trim(),
-        start: block.start,
-        end: block.end,
-        requireRequestedTool: false,
-      });
-    }
+  toolCandidates.sort((a, b) => a.start - b.start);
 
-    toolCandidates.sort((a, b) => a.start - b.start);
+  if (toolCandidates.length === 0) {
+    const salvaged = findUnclosedToolOpenerSalvage(normalizedText);
+    if (salvaged) toolCandidates.push(salvaged);
+  }
 
-    if (toolCandidates.length === 0) {
-      const salvaged = findUnclosedToolOpenerSalvage(normalizedText);
-      if (salvaged) toolCandidates.push(salvaged);
-    }
-
+  if (toolCandidates.length > 0) {
     for (const candidate of toolCandidates) {
       const parsed = parseLooseJsonObject(candidate.raw);
       const emittedName =
@@ -830,6 +794,75 @@ export function parseToolCallsFromText(
         function: { name, arguments: args },
       });
       acceptedRanges.push({ start: candidate.start, end: candidate.end });
+    }
+  }
+
+  // ── Bash code block parsing (fallback) ─────────────────────────────────
+  // Only parse bash blocks if no <tool> blocks were found. The model generates
+  // ```bash blocks instead of <tool> blocks. Extract the command and convert
+  // to a tool_call. This has much higher success rate because the model is
+  // "generating text" not "calling a tool".
+  if (toolCalls.length === 0) {
+    const bashMatches: Array<{ command: string; start: number; end: number }> = [];
+    let bashMatch: RegExpExecArray | null;
+    const bashRe = new RegExp(BASH_BLOCK_RE.source, BASH_BLOCK_RE.flags);
+    while ((bashMatch = bashRe.exec(normalizedText)) !== null) {
+      const command = bashMatch[1].trim();
+      if (command) {
+        bashMatches.push({
+          command,
+          start: bashMatch.index,
+          end: bashMatch.index + bashMatch[0].length,
+        });
+      }
+    }
+
+    // Also try untagged code blocks if no tagged ones found.
+    if (bashMatches.length === 0) {
+      const untaggedRe = new RegExp(UNTAGGED_BLOCK_RE.source, UNTAGGED_BLOCK_RE.flags);
+      let untaggedMatch: RegExpExecArray | null;
+      while ((untaggedMatch = untaggedRe.exec(normalizedText)) !== null) {
+        const command = untaggedMatch[1].trim();
+        if (
+          command &&
+          !command.startsWith("{") &&
+          !command.startsWith("[") &&
+          !command.startsWith("<")
+        ) {
+          bashMatches.push({
+            command,
+            start: untaggedMatch.index,
+            end: untaggedMatch.index + untaggedMatch[0].length,
+          });
+        }
+      }
+    }
+
+    if (bashMatches.length > 0) {
+      for (const bm of bashMatches) {
+        const classified = classifyBashCommand(bm.command, requestedTools);
+        if (classified) {
+          toolCalls.push({
+            id: `${idSeed}_${toolCalls.length}`,
+            type: "function",
+            function: {
+              name: classified.name,
+              arguments: JSON.stringify(classified.args),
+            },
+          });
+        } else {
+          const shellToolName = resolveShellToolName(requestedTools);
+          toolCalls.push({
+            id: `${idSeed}_${toolCalls.length}`,
+            type: "function",
+            function: {
+              name: shellToolName,
+              arguments: JSON.stringify({ command: bm.command }),
+            },
+          });
+        }
+        acceptedRanges.push({ start: bm.start, end: bm.end });
+      }
     }
   }
 
