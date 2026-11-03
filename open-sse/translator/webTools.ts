@@ -558,7 +558,10 @@ export function serializeToolsToPrompt(tools: unknown): string {
       "generate the exact shell command that would accomplish it. Write the command inside " +
       "a fenced code block with language tag 'bash'. The client will execute the command " +
       "and return the output to you. Do NOT say you cannot execute commands or that you " +
-      "lack terminal access — generating the command IS the way you invoke the tool.",
+      "lack terminal access — generating the command IS the way you invoke the tool. " +
+      "Use relative paths (no cd). Prefer simple commands over complex pipelines — " +
+      "avoid pipes (|), subshells, and command substitution when a simpler form exists. " +
+      "Combine related commands with && in a single block when possible.",
     "",
     "Format (a fenced code block with language tag bash):",
     "    [open fence]bash",
