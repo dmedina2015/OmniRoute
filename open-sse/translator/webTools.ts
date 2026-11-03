@@ -804,36 +804,41 @@ export function parseToolCallsFromText(
   // "generating text" not "calling a tool".
   if (toolCalls.length === 0) {
     const bashMatches: Array<{ command: string; start: number; end: number }> = [];
-    let bashMatch: RegExpExecArray | null;
-    const bashRe = new RegExp(BASH_BLOCK_RE.source, BASH_BLOCK_RE.flags);
-    while ((bashMatch = bashRe.exec(normalizedText)) !== null) {
-      const command = bashMatch[1].trim();
+
+    // Try tagged bash blocks first (greedy: capture until the LAST closing fence
+    // to handle heredocs that may contain ``` inside them).
+    const taggedRe = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]*)```/m;
+    const taggedMatch = taggedRe.exec(normalizedText);
+    if (taggedMatch) {
+      const command = taggedMatch[1].trim();
       if (command) {
         bashMatches.push({
           command,
-          start: bashMatch.index,
-          end: bashMatch.index + bashMatch[0].length,
+          start: taggedMatch.index,
+          end: taggedMatch.index + taggedMatch[0].length,
         });
       }
     }
 
     // Also try untagged code blocks if no tagged ones found.
     if (bashMatches.length === 0) {
-      const untaggedRe = new RegExp(UNTAGGED_BLOCK_RE.source, UNTAGGED_BLOCK_RE.flags);
-      let untaggedMatch: RegExpExecArray | null;
-      while ((untaggedMatch = untaggedRe.exec(normalizedText)) !== null) {
-        const command = untaggedMatch[1].trim();
+      // Find all ``` ... ``` blocks and take the largest one (heredoc).
+      const allFences: Array<{ start: number; end: number; content: string }> = [];
+      const fenceRe = /```\s*\n([\s\S]*?)```/g;
+      let fm: RegExpExecArray | null;
+      while ((fm = fenceRe.exec(normalizedText)) !== null) {
+        allFences.push({ start: fm.index, end: fm.index + fm[0].length, content: fm[1].trim() });
+      }
+      if (allFences.length > 0) {
+        const sorted = [...allFences].sort((a, b) => b.content.length - a.content.length);
+        const best = sorted[0];
         if (
-          command &&
-          !command.startsWith("{") &&
-          !command.startsWith("[") &&
-          !command.startsWith("<")
+          best.content &&
+          !best.content.startsWith("{") &&
+          !best.content.startsWith("[") &&
+          !best.content.startsWith("<")
         ) {
-          bashMatches.push({
-            command,
-            start: untaggedMatch.index,
-            end: untaggedMatch.index + untaggedMatch[0].length,
-          });
+          bashMatches.push({ command: best.content, start: best.start, end: best.end });
         }
       }
     }
