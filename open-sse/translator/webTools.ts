@@ -567,6 +567,8 @@ export function serializeToolsToPrompt(tools: unknown): string {
     "    [open fence]bash",
     "    <command>",
     "    [close fence]",
+    "  IMPORTANT: always close the code block with a closing fence (```) on its own line " +
+      "after the command. Never omit the closing fence — an unclosed block cannot be executed.",
     "",
     "Examples:",
     "  To list files: a code block containing: ls -la",
@@ -731,16 +733,29 @@ export function parseToolCallsFromText(
   const requestedToolNames = getRequestedToolNames(requestedTools);
 
   // Check if there are any parseable blocks.
+  // #adapta-unclosed-fence: models sometimes forget to close the ```bash fence.
+  // Treat an unclosed opening fence as a candidate too, so the flow does not break.
   const hasBashBlock = typeof normalizedText === "string" && BASH_BLOCK_RE.test(normalizedText);
   BASH_BLOCK_RE.lastIndex = 0;
+  const hasUnclosedBashBlock =
+    typeof normalizedText === "string" && /```(?:bash|sh|shell|zsh)\s*\n/.test(normalizedText);
   const hasUntaggedBlock =
     typeof normalizedText === "string" && UNTAGGED_BLOCK_RE.test(normalizedText);
   UNTAGGED_BLOCK_RE.lastIndex = 0;
+  const hasUnclosedUntaggedBlock =
+    typeof normalizedText === "string" && /```\s*\n/.test(normalizedText);
   const hasToolTag =
     typeof normalizedText === "string" &&
     (normalizedText.includes("<tool>") || normalizedText.includes("<tool_call"));
 
-  if (typeof normalizedText !== "string" || (!hasBashBlock && !hasUntaggedBlock && !hasToolTag)) {
+  if (
+    typeof normalizedText !== "string" ||
+    (!hasBashBlock &&
+      !hasUnclosedBashBlock &&
+      !hasUntaggedBlock &&
+      !hasUnclosedUntaggedBlock &&
+      !hasToolTag)
+  ) {
     return { content: text ?? "", toolCalls: null };
   }
 
@@ -811,7 +826,15 @@ export function parseToolCallsFromText(
     // Try tagged bash blocks first (greedy: capture until the LAST closing fence
     // to handle heredocs that may contain ``` inside them).
     const taggedRe = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]*)```/m;
-    const taggedMatch = taggedRe.exec(normalizedText);
+    let taggedMatch = taggedRe.exec(normalizedText);
+    // #adapta-unclosed-fence: if the model forgot to close the fence, fall back
+    // to capturing everything after the opening fence to the end of the text.
+    if (!taggedMatch) {
+      const openCount = (normalizedText.match(/```(?:bash|sh|shell|zsh)\b/g) || []).length;
+      if (openCount >= 1 && openCount % 2 === 1) {
+        taggedMatch = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]+)/.exec(normalizedText);
+      }
+    }
     if (taggedMatch) {
       const command = taggedMatch[1].trim();
       if (command) {
@@ -842,6 +865,29 @@ export function parseToolCallsFromText(
           !best.content.startsWith("<")
         ) {
           bashMatches.push({ command: best.content, start: best.start, end: best.end });
+        }
+      } else {
+        // #adapta-unclosed-fence: an untagged fence with no closing fence.
+        // Only attempt this when the number of ``` fence markers is odd, i.e. there
+        // is a genuinely unmatched opening fence.
+        const fenceCount = (normalizedText.match(/```/g) || []).length;
+        if (fenceCount % 2 === 1) {
+          const unclosedMatch = /```\s*\n([\s\S]+)/.exec(normalizedText);
+          if (unclosedMatch) {
+            const content = unclosedMatch[1].trim();
+            if (
+              content &&
+              !content.startsWith("{") &&
+              !content.startsWith("[") &&
+              !content.startsWith("<")
+            ) {
+              bashMatches.push({
+                command: content,
+                start: unclosedMatch.index,
+                end: unclosedMatch.index + unclosedMatch[0].length,
+              });
+            }
+          }
         }
       }
     }
