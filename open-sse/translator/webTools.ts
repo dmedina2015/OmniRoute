@@ -729,7 +729,8 @@ export function parseToolCallsFromText(
   idSeed = "call",
   requestedTools?: unknown
 ): { content: string; toolCalls: OpenAIToolCall[] | null } {
-  const normalizedText = typeof text === "string" ? normalizeDsmlToolCalls(text) : text;
+  const normalizedText =
+    typeof text === "string" ? stripDsmlResidue(normalizeDsmlToolCalls(text)) : text;
   const requestedToolNames = getRequestedToolNames(requestedTools);
 
   // Check if there are any parseable blocks.
@@ -1010,6 +1011,33 @@ const TOOL_REFUSAL_STATED_INTENT_PATTERNS: RegExp[] = [
  * decide whether an upstream attempt should be retried — NOT to alter the text the
  * client sees.
  */
+/**
+ * Any DSML tag, in every bar variant the models emit (fullwidth double, fullwidth
+ * single, ASCII). Kept next to the resolver above so the three spellings stay in one
+ * place.
+ */
+const DSML_ANY_TAG_RE =
+  /<\/?(?:｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*(?:function_calls|calls|invoke|parameter)\b[^>]*>/gi;
+
+/**
+ * Remove DSML tags that survived normalization.
+ *
+ * `normalizeDsmlToolCalls()` only rewrites COMPLETE `<invoke>…</invoke>` envelopes and
+ * strips `<...calls>`; a reply that closes the protocol without opening it — the common
+ * "forgot the closing ``` fence" case — leaves orphan `</…parameter>` / `</…invoke>`
+ * lines behind. The unclosed-fence fallback then captures everything to the end of the
+ * text, so those tags land inside the shell command and the client runs markup
+ * (#adapta-dsml-residue).
+ *
+ * Applied AFTER normalization on purpose: stripping first would delete the markers of
+ * a valid envelope before it could be converted into a tool call.
+ */
+export function stripDsmlResidue(text: string): string {
+  if (typeof text !== "string" || !text) return text;
+  if (!/DSML/i.test(text)) return text;
+  return text.replace(DSML_ANY_TAG_RE, "");
+}
+
 export function looksLikeToolRefusal(text: string | null | undefined): boolean {
   if (typeof text !== "string") return false;
   const trimmed = text.trim();
