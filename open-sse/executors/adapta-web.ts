@@ -1,5 +1,10 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import { prepareToolMessages, looksLikeToolRefusal } from "../translator/webTools.ts";
+import {
+  prepareToolMessages,
+  looksLikeToolRefusal,
+  looksLikeToolPromise,
+  buildToolCorrectiveNudge,
+} from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 
@@ -610,13 +615,30 @@ export class AdaptaWebExecutor extends BaseExecutor {
     // agentic loop. When tools are in play, a refused reply is therefore retried
     // upstream (bounded), because the upstream is non-deterministic and asking again
     // usually just works.
-    const fireRequest = async (): Promise<Response> =>
-      fetch(ADAPTA_STREAM_URL, {
+    // A corrective retry must carry the correction: re-sending the identical payload
+    // reproduces the same refusal or plan (#adapta-tool-promise), so the nudge is
+    // appended as one extra user turn built in Adapta's own message shape.
+    const fireRequest = async (nudge?: string): Promise<Response> => {
+      const payload = nudge
+        ? {
+            ...requestPayload,
+            messages: [
+              ...requestPayload.messages,
+              {
+                id: crypto.randomUUID(),
+                role: "user" as const,
+                parts: [{ type: "text" as const, text: nudge }],
+              },
+            ],
+          }
+        : requestPayload;
+      return fetch(ADAPTA_STREAM_URL, {
         method: "POST",
         headers,
-        body: JSON.stringify(requestPayload),
+        body: JSON.stringify(payload),
         signal: signal ?? undefined,
       });
+    };
 
     /** Drain an upstream SSE response down to its concatenated text. */
     const collectText = async (
@@ -732,13 +754,25 @@ export class AdaptaWebExecutor extends BaseExecutor {
       // would burn an upstream call and could replace a correct answer with a worse one.
       let fullText = collected.text;
       let attempts = 0;
-      while (attempts < ADAPTA_MAX_REFUSAL_RETRIES && looksLikeToolRefusal(fullText)) {
+      while (attempts < ADAPTA_MAX_REFUSAL_RETRIES) {
+        const refused = looksLikeToolRefusal(fullText);
+        // #adapta-tool-promise: a short "I'll start by inspecting…" / "Vou começar
+        // analisando…" reply is the same stall as a refusal — the model announced the
+        // action and stopped, so the client sees `finish_reason: "stop"` with no
+        // `tool_calls` and ends the turn having edited nothing.
+        const promisedOnly = !refused && looksLikeToolPromise(fullText);
+        if (!refused && !promisedOnly) break;
+
         attempts += 1;
         log?.warn?.(
           "ADAPTA-WEB",
-          `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES}) — retrying upstream`
+          promisedOnly
+            ? `Tool-aware reply was a promise with no command (attempt ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES}) — retrying with a corrective nudge`
+            : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES}) — retrying with a corrective nudge`
         );
-        const retryResp = await fireRequest();
+        const retryResp = await fireRequest(
+          buildToolCorrectiveNudge(promisedOnly ? "promise" : "refusal")
+        );
         if (!retryResp.ok) {
           // An HTTP-level failure on retry is surfaced as-is rather than silently
           // degrading to the refused text the client already rejected.
@@ -762,7 +796,19 @@ export class AdaptaWebExecutor extends BaseExecutor {
             transformedBody: requestPayload,
           };
         }
-        fullText = retryCollected.text;
+        // #adapta-empty-retry: an empty retry must not erase a usable reply. Adapta
+        // intermittently answers the repeated turn with no text at all; assigning it
+        // unconditionally turned "the model planned" into `content: ""`, which clients
+        // report as "completed without text" with nothing to show the user.
+        if (retryCollected.text.trim()) {
+          fullText = retryCollected.text;
+        } else {
+          log?.warn?.(
+            "ADAPTA-WEB",
+            `Retry ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES} returned no text — keeping the previous reply`
+          );
+          break;
+        }
       }
 
       const bufferedJson = new Response(

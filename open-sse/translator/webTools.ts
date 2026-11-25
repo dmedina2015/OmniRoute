@@ -1021,6 +1021,61 @@ export function looksLikeToolRefusal(text: string | null | undefined): boolean {
   return false;
 }
 
+/**
+ * A reply that merely ANNOUNCES the next action without emitting a tool call.
+ *
+ * `looksLikeToolRefusal()` above only recognises the verbs it enumerates
+ * ("I'll create", "vou editar"). Live traffic produces the same stall with verbs
+ * that list never had — "I'll start by inspecting the three files.", "Vou começar
+ * analisando o HTML." — so the promise slips through as a final answer:
+ * `finish_reason: "stop"` with no `tool_calls`, and the agentic loop ends having
+ * edited nothing (#adapta-tool-promise).
+ *
+ * Kept deliberately narrow on two axes so ordinary answers are never retried:
+ *  - only the LEADING clause counts (a plan that starts with a heading is a final
+ *    answer, not a promise to act);
+ *  - short replies only, and never one that already carries a fenced block or a
+ *    `<tool>` envelope (that is an action, even if the parser later rejects it).
+ */
+const TOOL_PROMISE_MAX_CHARS = 500;
+
+const TOOL_PROMISE_LEAD_PATTERNS: RegExp[] = [
+  /^\s*(?:(?:ok(?:ay)?|alright|sure|got\s+it|understood)[.,!\s-]+)?(?:i(?:'|’)?ll|i\s+will|i(?:'|’)?m\s+going\s+to|let\s+me|now)\b/i,
+  /^\s*(?:vou|vamos|vou\s+começar|começarei|comeco|primeiro\s+(?:vou|vamos)|antes\s+de\s+(?:tudo|começar|editar))\b/i,
+  /^\s*(?:start(?:ing)?\s+by|first,?\s+(?:i(?:'|’)?ll|let\s+me))\b/i,
+  /^\s*(?:let\s+us|let's)\b/i,
+];
+
+export function looksLikeToolPromise(text: string | null | undefined): boolean {
+  if (typeof text !== "string") return false;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > TOOL_PROMISE_MAX_CHARS) return false;
+  if (/```|<tool/i.test(trimmed)) return false;
+  return TOOL_PROMISE_LEAD_PATTERNS.some((re) => re.test(trimmed));
+}
+
+/**
+ * Correction appended as an extra user turn before a bounded retry.
+ *
+ * A blind re-roll of the identical payload (the pre-existing behaviour for
+ * refusals) usually reproduces the same refusal or plan; the retry only converts
+ * into an action when the model is told what was wrong with the previous reply.
+ */
+export function buildToolCorrectiveNudge(kind: "refusal" | "promise"): string {
+  if (kind === "promise") {
+    return (
+      "STOP. Your previous reply only announced an intention and emitted no command. " +
+      "Do not explain, do not describe a plan, and do not say what you are about to do. " +
+      "Reply NOW with exactly one fenced ```bash block containing the first real command."
+    );
+  }
+  return (
+    "STOP. The client tools above are available in this conversation and are invoked " +
+    "with a fenced ```bash block. Do not claim they are unavailable and do not describe " +
+    "them. Reply NOW with exactly one fenced ```bash block containing the first real command."
+  );
+}
+
 // ── Shared helpers for web-cookie executors ────────────────────────────────
 
 interface ToolPrepResult {
