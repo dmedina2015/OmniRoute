@@ -32,6 +32,7 @@ export const MODEL_KEY_MAP: Record<string, string> = {
   "adapta-glm-5-3-flash": "GLM_5_3_FLASH",
   "adapta-glm-5-2": "GLM_5_2",
   "adapta-grok-43": "GROK_43",
+  "adapta-grok-45": "GROK_45",
   "adapta-muse-spark-1-3": "MUSE_SPARK_1_3",
   "adapta-sonar-pro": "SONAR_PRO",
   "adapta-nvidia-nemotron-super": "NVIDIA_NEMOTRON_SUPER",
