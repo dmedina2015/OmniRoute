@@ -1,6 +1,7 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { buildAdaptaToolContract, buildAdaptaToolReminder } from "./adapta-web/contract.ts";
 import { buildAdaptaToolAwareResult } from "./adapta-web/parse.ts";
+import { resolveIsTemporaryChat } from "./adapta-web/temporaryChat.ts";
 import { resolveModelKey } from "./adapta-web/modelKeys.ts";
 import { buildAdaptaMessages } from "./adapta-web/messages.ts";
 import type { OpenAIMessage } from "./adapta-web/types.ts";
@@ -387,7 +388,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
     const requestPayload = {
       chatId,
       id: chatId,
-      isTemporaryChat: false,
+      isTemporaryChat: resolveIsTemporaryChat(bodyObj),
       mandatoryTools: [],
       skipImagePromptOptimization: true,
       modelAi: modelKey,
