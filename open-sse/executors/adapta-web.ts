@@ -4,6 +4,7 @@ import { resolveModelKey } from "./adapta-web/modelKeys.ts";
 import { buildAdaptaMessages } from "./adapta-web/messages.ts";
 import type { OpenAIMessage } from "./adapta-web/types.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
+import { buildToolModeResponse } from "./chatgptWebTools.ts";
 
 const ADAPTA_APP_URL = "https://agent.adapta.one";
 const ADAPTA_CLERK_URL = "https://clerk.agent.adapta.one";
@@ -394,8 +395,11 @@ export class AdaptaWebExecutor extends BaseExecutor {
       };
     }
 
-    // 4. Stream or collect
-    if (stream !== false) {
+    // 4. Stream or collect.
+    // Streaming is only safe when the request carries no tools: with tools the reply
+    // may be a tool envelope that must be parsed before it reaches the client (see the
+    // hasTools branch below).
+    if (!hasTools && stream !== false) {
       return {
         response: new Response(transformStream(resp.body!, model), {
           status: 200,
@@ -465,41 +469,42 @@ export class AdaptaWebExecutor extends BaseExecutor {
         requestedTools,
         "adp"
       );
-      if (toolCalls) {
-        return {
-          response: new Response(
-            JSON.stringify({
-              id: `chatcmpl-adp-${Date.now()}`,
-              object: "chat.completion",
-              created: Math.floor(Date.now() / 1000),
-              model,
-              choices: [
-                {
-                  index: 0,
-                  message: { role: "assistant", content: null, tool_calls: toolCalls },
-                  finish_reason: finishReason,
-                },
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } }
-          ),
-          url: ADAPTA_STREAM_URL,
-          headers,
-          transformedBody: requestPayload,
-        };
-      }
+
+      // Buffer, parse, then replay. Adapta has no native tool calling: a tool-aware
+      // reply is a literal envelope inside the text. Streaming it straight through
+      // (what the tools-free path does) leaks the envelope to the client as visible
+      // assistant prose with finish_reason "stop" — it never becomes `tool_calls`, so
+      // the client sees a narration that executed nothing. Streaming clients get the
+      // parsed completion replayed as a terminal SSE event instead.
+      const bufferedJson = new Response(
+        JSON.stringify({
+          id: `chatcmpl-adp-${Date.now()}`,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: toolCalls ? null : content,
+                ...(toolCalls ? { tool_calls: toolCalls } : {}),
+              },
+              finish_reason: toolCalls ? finishReason : "stop",
+            },
+          ],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
       return {
-        response: new Response(
-          JSON.stringify({
-            id: `chatcmpl-adp-${Date.now()}`,
-            object: "chat.completion",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        ),
+        response: await buildToolModeResponse(bufferedJson, requestedTools, stream !== false, {
+          cid: `chatcmpl-adp-${Date.now()}`,
+          created: Math.floor(Date.now() / 1000),
+          model,
+          idSeed: "adp",
+        }),
         url: ADAPTA_STREAM_URL,
         headers,
         transformedBody: requestPayload,
