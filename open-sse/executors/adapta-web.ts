@@ -1,5 +1,6 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import { prepareToolMessages, buildToolAwareResult } from "../translator/webTools.ts";
+import { buildAdaptaToolContract, buildAdaptaToolReminder } from "./adapta-web/contract.ts";
+import { buildAdaptaToolAwareResult } from "./adapta-web/parse.ts";
 import { resolveModelKey } from "./adapta-web/modelKeys.ts";
 import { buildAdaptaMessages } from "./adapta-web/messages.ts";
 import type { OpenAIMessage } from "./adapta-web/types.ts";
@@ -274,6 +275,40 @@ function transformStream(adaptaStream: ReadableStream, model: string): ReadableS
 
 // ── Executor ──────────────────────────────────────────────────────────────────
 
+/**
+ * Attach Adapta's tool protocol to the request.
+ *
+ * The contract goes in as a trailing system message: `buildAdaptaMessages()` keeps
+ * trailing system content as the LAST turn, which is where the model actually reads it
+ * (glued to the first turn it loses against a large client prompt). The reminder goes
+ * on the current user turn because web-UI models weigh that turn far more heavily.
+ */
+function applyAdaptaToolContract(
+  messages: OpenAIMessage[],
+  requestedTools: unknown
+): OpenAIMessage[] {
+  const contract = buildAdaptaToolContract(requestedTools);
+  if (!contract) return messages;
+
+  const effective = [...messages];
+  const reminder = buildAdaptaToolReminder(contract);
+  for (let i = effective.length - 1; i >= 0; i--) {
+    const msg = effective[i];
+    if (msg?.role !== "user") continue;
+    if (typeof msg.content === "string") {
+      effective[i] = { ...msg, content: msg.content + reminder };
+    } else if (Array.isArray(msg.content)) {
+      effective[i] = {
+        ...msg,
+        content: [...(msg.content as unknown[]), { type: "text", text: reminder }],
+      };
+    }
+    break;
+  }
+  effective.push({ role: "system", content: contract });
+  return effective;
+}
+
 export class AdaptaWebExecutor extends BaseExecutor {
   constructor() {
     super("adapta-web", { baseUrl: ADAPTA_STREAM_URL });
@@ -297,7 +332,11 @@ export class AdaptaWebExecutor extends BaseExecutor {
   async execute({ model, body, stream, credentials, signal, log }: ExecuteInput) {
     const bodyObj = (body ?? {}) as Record<string, unknown>;
     const messages = (Array.isArray(bodyObj.messages) ? bodyObj.messages : []) as OpenAIMessage[];
-    const { hasTools, requestedTools, effectiveMessages } = prepareToolMessages(bodyObj, messages);
+    const requestedTools = bodyObj.tools;
+    const hasTools = Array.isArray(requestedTools) && requestedTools.length > 0;
+    const effectiveMessages = hasTools
+      ? applyAdaptaToolContract(messages, requestedTools)
+      : messages;
 
     // 1. Extract and validate credentials
     const rawKey = String((credentials as Record<string, unknown>)?.apiKey ?? "");
@@ -332,7 +371,9 @@ export class AdaptaWebExecutor extends BaseExecutor {
     // 2. Build Adapta request body
     const modelKey = resolveModelKey(model);
     const chatId = crypto.randomUUID();
-    const adaptaMessages = buildAdaptaMessages(effectiveMessages, modelKey, chatId);
+    const adaptaMessages = buildAdaptaMessages(effectiveMessages, modelKey, chatId, {
+      toolCallFormat: hasTools ? "bash" : "tool-json",
+    });
 
     if (adaptaMessages.length === 0) {
       return {
@@ -464,7 +505,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     if (hasTools) {
-      const { content, toolCalls, finishReason } = buildToolAwareResult(
+      const { content, toolCalls, finishReason } = buildAdaptaToolAwareResult(
         fullText,
         requestedTools,
         "adp"
