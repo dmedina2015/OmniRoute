@@ -2,6 +2,8 @@ import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { buildAdaptaToolContract, buildAdaptaToolReminder } from "./adapta-web/contract.ts";
 import { buildAdaptaToolAwareResult } from "./adapta-web/parse.ts";
 import { resolveIsTemporaryChat } from "./adapta-web/temporaryChat.ts";
+import { isAdaptaPromise, isAdaptaRefusal } from "./adapta-web/refusals.ts";
+import { ADAPTA_MAX_TOOL_RETRIES, buildCorrectiveNudge } from "./adapta-web/retry.ts";
 import { resolveModelKey } from "./adapta-web/modelKeys.ts";
 import { buildAdaptaMessages } from "./adapta-web/messages.ts";
 import type { OpenAIMessage } from "./adapta-web/types.ts";
@@ -310,6 +312,37 @@ function applyAdaptaToolContract(
   return effective;
 }
 
+/** Drain an Adapta SSE body down to its concatenated text. */
+async function readCollectedText(body: ReadableStream): Promise<string> {
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let buf = "";
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === "text-delta" && ev.id !== "quick-response") {
+            text += String(ev.delta ?? "");
+          }
+        } catch {
+          // skip malformed event
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return text;
+}
+
 export class AdaptaWebExecutor extends BaseExecutor {
   constructor() {
     super("adapta-web", { baseUrl: ADAPTA_STREAM_URL });
@@ -410,13 +443,31 @@ export class AdaptaWebExecutor extends BaseExecutor {
       `POST ${ADAPTA_STREAM_URL} | model=${model} modelAi=${modelKey} msgs=${adaptaMessages.length}`
     );
 
-    // 3. Fire request
-    const resp = await fetch(ADAPTA_STREAM_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestPayload),
-      signal: signal ?? undefined,
-    });
+    // 3. Fire request. A corrective retry carries the correction: re-sending the
+    // identical payload reproduces the identical refusal or promise.
+    const fireRequest = async (nudge?: string): Promise<Response> => {
+      const payload = nudge
+        ? {
+            ...requestPayload,
+            messages: [
+              ...requestPayload.messages,
+              {
+                id: crypto.randomUUID(),
+                role: "user" as const,
+                parts: [{ type: "text" as const, text: nudge }],
+              },
+            ],
+          }
+        : requestPayload;
+      return fetch(ADAPTA_STREAM_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: signal ?? undefined,
+      });
+    };
+
+    const resp = await fireRequest();
 
     if (!resp.ok) {
       let errMsg = `Adapta error HTTP ${resp.status}`;
@@ -506,6 +557,48 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     if (hasTools) {
+      // Bounded retry: a tool-aware call fails with a plain refusal or a promise far
+      // more often than a native tool-calling API would, and both end the turn with no
+      // action. Retry with a correction until the reply is something to parse.
+      let attempts = 0;
+      while (attempts < ADAPTA_MAX_TOOL_RETRIES) {
+        const refused = isAdaptaRefusal(fullText);
+        const promisedOnly = !refused && isAdaptaPromise(fullText);
+        if (!refused && !promisedOnly) break;
+
+        attempts += 1;
+        log?.warn?.(
+          "ADAPTA-WEB",
+          promisedOnly
+            ? `Tool-aware reply was a promise with no command (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+            : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+        );
+
+        const retryResp = await fireRequest(
+          buildCorrectiveNudge(promisedOnly ? "promise" : "refusal")
+        );
+        if (!retryResp.ok) {
+          return {
+            response: makeErrorResponse(retryResp.status, `Adapta error HTTP ${retryResp.status}`),
+            url: ADAPTA_STREAM_URL,
+            headers,
+            transformedBody: requestPayload,
+          };
+        }
+
+        const retryText = await readCollectedText(retryResp.body!);
+        if (!retryText.trim()) {
+          // An empty retry must not erase a usable reply: it used to surface as
+          // content: "" and clients reported "completed without text".
+          log?.warn?.(
+            "ADAPTA-WEB",
+            `Retry ${attempts}/${ADAPTA_MAX_TOOL_RETRIES} returned no text — keeping the previous reply`
+          );
+          break;
+        }
+        fullText = retryText;
+      }
+
       const { content, toolCalls, finishReason } = buildAdaptaToolAwareResult(
         fullText,
         requestedTools,
