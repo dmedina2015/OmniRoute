@@ -1,5 +1,8 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { prepareToolMessages, buildToolAwareResult } from "../translator/webTools.ts";
+import { resolveModelKey } from "./adapta-web/modelKeys.ts";
+import { buildAdaptaMessages } from "./adapta-web/messages.ts";
+import type { OpenAIMessage } from "./adapta-web/types.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 
 const ADAPTA_APP_URL = "https://agent.adapta.one";
@@ -8,37 +11,7 @@ const ADAPTA_STREAM_URL = `${ADAPTA_APP_URL}/api/chat/stream/v1`;
 const ADAPTA_PUBLIC_STREAM_ERROR = `\n\n[Erro: ${sanitizeErrorMessage("Adapta upstream error")}]`;
 
 // Default model key in Adapta's catalog (auto-select).
-const DEFAULT_MODEL_KEY = "ONE";
-
-// Map from OmniRoute model IDs to Adapta catalog model keys.
-export const MODEL_KEY_MAP: Record<string, string> = {
-  "adapta-one": "ONE",
-  "adapta-gpt-6-luna": "GPT_6_LUNA",
-  "adapta-claude-5-5-haiku": "CLAUDE_5_5_HAIKU",
-  "adapta-claude-5-5-sonnet": "CLAUDE_5_5_SONNET",
-  "adapta-claude-5-sonnet": "CLAUDE_5_SONNET",
-  "adapta-gemini-3-8-flash": "GEMINI_3_8_FLASH",
-  "adapta-gemini-3-7-flash": "GEMINI_3_7_FLASH",
-  "adapta-gemini-3-1-pro-preview": "GEMINI_3_1_PRO_PREVIEW",
-  "adapta-deepseek-v4-1-flash-1017": "DEEPSEEK_V4_1_FLASH_1017",
-  "adapta-deepseek-v4-flash-updated": "DEEPSEEK_V4_FLASH_UPDATED",
-  "adapta-deepseek-v4-pro-0813": "DEEPSEEK_V4_PRO_0813",
-  "adapta-kimi-k2-7-code": "KIMI_K2_7_CODE",
-  "adapta-kimi-k2-6": "KIMI_K2_6",
-  "adapta-minimax-m3": "MINIMAX_M3",
-  "adapta-minimax-m3-1-flash": "MINIMAX_M3_1_FLASH",
-  "adapta-minimax-m2-7-highspeed": "MINIMAX_M2_7_HIGHSPEED",
-  "adapta-minimax-m2-7": "MINIMAX_M2_7",
-  "adapta-qwen-3-8-27b": "QWEN_3_8_27B",
-  "adapta-qwen-3-8-flash": "QWEN_3_8_FLASH",
-  "adapta-qwen-3-7-plus": "QWEN_3_7_PLUS",
-  "adapta-glm-5-3-flash": "GLM_5_3_FLASH",
-  "adapta-glm-5-2": "GLM_5_2",
-  "adapta-grok-43": "GROK_43",
-  "adapta-muse-spark-1-3": "MUSE_SPARK_1_3",
-  "adapta-sonar-pro": "SONAR_PRO",
-  "adapta-nvidia-nemotron-super": "NVIDIA_NEMOTRON_SUPER",
-};
+export { MODEL_KEY_MAP } from "./adapta-web/modelKeys.ts";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -201,89 +174,7 @@ async function getSessionJwt(
 
 // ── Request/response translation ──────────────────────────────────────────────
 
-interface OpenAIMessage {
-  role: string;
-  content: unknown;
-}
-
-interface AdaptaPart {
-  type: "text";
-  text: string;
-}
-
-interface AdaptaMessage {
-  id: string;
-  role: string;
-  parts: AdaptaPart[];
-  metadata?: Record<string, unknown>;
-  state?: string;
-}
-
-/** Extract plain text from an OpenAI message content (string or content-parts array). */
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((c: Record<string, unknown>) => c.type === "text")
-      .map((c: Record<string, unknown>) => String(c.text ?? ""))
-      .join("");
-  }
-  return String(content ?? "");
-}
-
-/** Build the final Adapta messages array, injecting system prompt into first user message. */
-export function buildAdaptaMessages(
-  messages: OpenAIMessage[],
-  modelKey: string,
-  chatId: string
-): AdaptaMessage[] {
-  let systemText = "";
-  const rest: OpenAIMessage[] = [];
-
-  for (const msg of messages) {
-    const role = msg.role === "developer" ? "system" : msg.role;
-    if (role === "system") {
-      systemText += (systemText ? "\n" : "") + extractText(msg.content);
-    } else {
-      rest.push(msg);
-    }
-  }
-
-  const adapted: AdaptaMessage[] = [];
-  let systemInjected = false;
-
-  for (const msg of rest) {
-    if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const text = extractText(msg.content);
-    if (!text.trim()) continue;
-
-    const id = crypto.randomUUID();
-
-    if (msg.role === "assistant") {
-      adapted.push({
-        id,
-        role: "assistant",
-        parts: [{ type: "text", text }],
-        metadata: { model: modelKey, chatId, messageId: id, isPaused: false },
-        state: "done",
-      });
-      continue;
-    }
-
-    if (!systemInjected && systemText && msg.role === "user") {
-      adapted.push({
-        id,
-        role: "user",
-        parts: [{ type: "text", text: `${systemText}\n\n${text}` }],
-      });
-      systemInjected = true;
-    } else {
-      adapted.push({ id, role: "user", parts: [{ type: "text", text }] });
-    }
-  }
-
-  return adapted;
-}
+export { buildAdaptaMessages } from "./adapta-web/messages.ts";
 
 // ── SSE transform: Adapta → OpenAI ───────────────────────────────────────────
 
@@ -438,7 +329,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     // 2. Build Adapta request body
-    const modelKey = MODEL_KEY_MAP[model] ?? DEFAULT_MODEL_KEY;
+    const modelKey = resolveModelKey(model);
     const chatId = crypto.randomUUID();
     const adaptaMessages = buildAdaptaMessages(effectiveMessages, modelKey, chatId);
 
