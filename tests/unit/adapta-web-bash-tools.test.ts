@@ -245,3 +245,41 @@ describe("buildAdaptaToolAwareResult", () => {
     assert.match(r.content, /412 linhas/);
   });
 });
+
+describe("classifyBashCommand — real grep shapes", () => {
+  it("accepts long flags and drops --include when the tool does not declare it", () => {
+    const r = classifyBashCommand("grep -rn --include='*' -i 'bem' /tmp/x", CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "bem", path: "/tmp/x" });
+  });
+
+  it("forwards --include when the tool declares that argument", () => {
+    const withInclude = CLIENT_TOOLS.map((t) =>
+      t.function.name === "grep"
+        ? {
+            ...t,
+            function: {
+              ...t.function,
+              parameters: {
+                type: "object",
+                properties: {
+                  pattern: { type: "string" },
+                  path: { type: "string" },
+                  include: { type: "string" },
+                },
+                required: ["pattern"],
+              },
+            },
+          }
+        : t
+    );
+    const r = classifyBashCommand("grep -rn --include='*.ts' 'bem' .", withInclude);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "bem", path: ".", include: "*.ts" });
+  });
+
+  it("still maps the plain grep idiom", () => {
+    const r = classifyBashCommand("grep -n 'bem' a.txt", CLIENT_TOOLS);
+    assert.deepEqual(r?.args, { pattern: "bem", path: "a.txt" });
+  });
+});

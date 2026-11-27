@@ -84,8 +84,11 @@ export function extractCommand(text: string): string | null {
 const PATH_ARGS = ["path", "filePath", "file_path", "filename", "file"] as const;
 const CONTENT_ARGS = ["content", "text", "data"] as const;
 const PATTERN_ARGS = ["pattern", "query", "regex"] as const;
+const INCLUDE_ARGS = ["include", "glob", "filePattern"] as const;
 const OLD_ARGS = ["oldString", "old_string", "oldText", "search"] as const;
 const NEW_ARGS = ["newString", "new_string", "newText", "replace"] as const;
+
+const OPTIONAL_FIELDS = new Set(["include"]);
 
 function unquote(value: string): string {
   return value.replace(/^(['"])([\s\S]*)\1$/, "$2");
@@ -103,14 +106,19 @@ function buildArgs(
       path: PATH_ARGS,
       content: CONTENT_ARGS,
       pattern: PATTERN_ARGS,
+      include: INCLUDE_ARGS,
       old: OLD_ARGS,
       new: NEW_ARGS,
     };
     const candidates = argsFor[logical];
     if (!candidates) continue;
     const name = resolveArgName(spec, candidates);
-    // A declared field we cannot name is a mapping we must not guess: fall back to shell.
-    if (!name) return null;
+    if (!name) {
+      // Optional extras (e.g. --include) are dropped when the client has no such
+      // argument; a required one we cannot name means we must not guess.
+      if (OPTIONAL_FIELDS.has(logical)) continue;
+      return null;
+    }
     args[name] = value;
   }
   return satisfiesRequired(spec, args) ? args : null;
@@ -163,8 +171,19 @@ export function classifyBashCommand(
   const write = /^(?:printf|echo)\s+(['"])([\s\S]*)\1\s*>\s*(\S+)$/.exec(cmd);
   if (write) return asCall(writeSpec, { path: unquote(write[3]), content: write[2] });
 
-  const grep = /^(?:grep|rg)\s+(?:-[a-zA-Z]+\s+)*(['"]?)([^'"]+)\1\s+([^\s|&;]+)$/.exec(cmd);
-  if (grep) return asCall(grepSpec, { pattern: grep[2], path: unquote(grep[3]) });
+  // Flags may be short (-rn, -i) or long with an optional value (--include='*'),
+  // which is what models actually write: "grep -rn --include='*' -i 'bem' <dir>".
+  const grep =
+    /^(?:grep|rg)\s+((?:--?[A-Za-z][\w-]*(?:=(?:'[^']*'|"[^"]*"|\S+))?\s+)*)(['"]?)([^'"]+)\2\s+([^\s|&;]+)$/.exec(
+      cmd
+    );
+  if (grep) {
+    const includeMatch = /--include=(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(grep[1]);
+    const include = includeMatch
+      ? (includeMatch[1] ?? includeMatch[2] ?? includeMatch[3])
+      : undefined;
+    return asCall(grepSpec, { pattern: grep[3], path: unquote(grep[4]), include });
+  }
 
   const glob = /^(?:ls|find)\s+(?!-[a-zA-Z])([^\s|&;]+)$/.exec(cmd);
   if (glob) return asCall(globSpec, { pattern: unquote(glob[1]) });
