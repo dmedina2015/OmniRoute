@@ -404,3 +404,26 @@ describe("grep patterns are translated to the tool's regex dialect", () => {
     assert.deepEqual(r?.args, { pattern: "x", path: "src/" });
   });
 });
+
+// Live: "Search path does not exist: /root/source/financas/tui.py</parameter>" — a
+// malformed envelope leaked a bare closing tag into the path.
+describe("bare protocol tags in the path", () => {
+  it("strips </parameter> from a grep path", () => {
+    const r = classifyBashCommand("grep -n 'Tipo' tui.py</parameter>", CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "Tipo", path: "tui.py" });
+  });
+
+  it("strips </invoke> from a read path", () => {
+    const r = classifyBashCommand("cat tui.py</invoke>", CLIENT_TOOLS);
+    assert.equal(r?.name, "read");
+    assert.deepEqual(r?.args, { path: "tui.py" });
+  });
+
+  it("removes the tag from the extracted command", () => {
+    assert.equal(
+      extractCommand("```bash\nsed -n '1,20p' tui.py</parameter>\n```"),
+      "sed -n '1,20p' tui.py"
+    );
+  });
+});

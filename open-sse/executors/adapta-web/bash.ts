@@ -15,6 +15,15 @@ const DSML_ANY_TAG_RE =
   /<\/?(?:｜｜DSML｜｜|｜DSML｜|\|DSML\|)\s*(?:function_calls|calls|invoke|parameter)\b[^>]*>/gi;
 
 /**
+ * The same closing tags WITHOUT the DSML bars.
+ *
+ * A malformed envelope leaked a bare "</parameter>" into the command, so the extracted
+ * path became "tui.py</parameter>" and the client reported "Search path does not exist".
+ * "<tool>" itself is excluded: the shared parser uses it as a real delimiter.
+ */
+const STRAY_PROTOCOL_TAG_RE = /<\/?(?:parameter|invoke|function_calls|calls|tool_call)\b[^>]*>/gi;
+
+/**
  * Remove DSML tags that survived the shared normalizer.
  *
  * A reply that closes the protocol without opening it (the usual "forgot the fence"
@@ -23,8 +32,7 @@ const DSML_ANY_TAG_RE =
  */
 export function stripDsmlResidue(text: string): string {
   if (typeof text !== "string" || !text) return text;
-  if (!/DSML/i.test(text)) return text;
-  return text.replace(DSML_ANY_TAG_RE, "");
+  return text.replace(DSML_ANY_TAG_RE, "").replace(STRAY_PROTOCOL_TAG_RE, "");
 }
 
 const BASH_OPEN_RE = /```(?:bash|sh|shell|zsh)[^\S\n]*\n/;
@@ -244,6 +252,14 @@ function unquote(value: string): string {
   return value.replace(/^(['"])([\s\S]*)\1$/, "$2");
 }
 
+/** Trim protocol leftovers and quotes from a path captured out of a command. */
+function cleanPath(value: string): string {
+  return unquote(value)
+    .replace(/<\/?(?:parameter|invoke|function_calls|calls|tool_call)\b[^>]*>/gi, "")
+    .replace(/\/?>+$/, "")
+    .trim();
+}
+
 /** Build the argument object for a tool, using only names the client declared. */
 function buildArgs(
   spec: NonNullable<ReturnType<typeof findToolSpec>>,
@@ -324,7 +340,7 @@ export function classifyBashCommand(
   const editSpec = findToolSpec(specs, "edit", "replace", "patch");
 
   const cat = /^cat\s+(?:-\S+\s+)*([^\s|&;]+)$/.exec(cmd);
-  if (cat) return asCall(readSpec, { path: unquote(cat[1]) });
+  if (cat) return asCall(readSpec, { path: cleanPath(cat[1]) });
 
   // Heredoc write: cat > file <<'EOF' ... EOF  (the usual way a model writes a file).
   const heredocWrite =
@@ -336,18 +352,18 @@ export function classifyBashCommand(
   }
 
   const nlRead = /^nl\s+(?:-\S+\s+)*([^\s|&;]+)$/.exec(cmd);
-  if (nlRead) return asCall(readSpec, { path: unquote(nlRead[1]) });
+  if (nlRead) return asCall(readSpec, { path: cleanPath(nlRead[1]) });
   const batRead = /^bat\s+(?:-\S+\s+)*([^\s|&;]+)$/.exec(cmd);
-  if (batRead) return asCall(readSpec, { path: unquote(batRead[1]) });
+  if (batRead) return asCall(readSpec, { path: cleanPath(batRead[1]) });
 
   const head = /^(?:head|tail)\s+(?:-n\s*)?(\d+)?\s*([^\s|&;]+)$/.exec(cmd);
-  if (head && head[2]) return asCall(readSpec, { path: unquote(head[2]) });
+  if (head && head[2]) return asCall(readSpec, { path: cleanPath(head[2]) });
 
   const sedRead = /^sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s+([^\s|&;]+)$/.exec(cmd);
-  if (sedRead) return asCall(readSpec, { path: unquote(sedRead[3]) });
+  if (sedRead) return asCall(readSpec, { path: cleanPath(sedRead[3]) });
 
   const write = /^(?:printf|echo)\s+(['"])([\s\S]*)\1\s*>\s*(\S+)$/.exec(cmd);
-  if (write) return asCall(writeSpec, { path: unquote(write[3]), content: write[2] });
+  if (write) return asCall(writeSpec, { path: cleanPath(write[3]), content: write[2] });
 
   // Flags may be short (-rn, -i) or long with an optional value (--include='*'),
   // which is what models actually write: "grep -rn --include='*' -i 'bem' <dir>".
@@ -365,7 +381,7 @@ export function classifyBashCommand(
       // An untranslatable pattern is better run by the shell than sent to a regex engine
       // that would reject it.
       if (!pattern) return null;
-      const candidate = positional[1] ? unquote(positional[1]) : undefined;
+      const candidate = positional[1] ? cleanPath(positional[1]) : undefined;
       // Only a real path is forwarded: a bare word ("categorias_disponiveis") is another
       // pattern, and sending it as `path` produced "Search path does not exist".
       const path = candidate && looksLikePath(candidate) ? candidate : undefined;
@@ -374,10 +390,10 @@ export function classifyBashCommand(
   }
 
   const glob = /^(?:ls|find)\s+(?!-[a-zA-Z])([^\s|&;]+)$/.exec(cmd);
-  if (glob) return asCall(globSpec, { pattern: unquote(glob[1]) });
+  if (glob) return asCall(globSpec, { pattern: cleanPath(glob[1]) });
 
   const edit = /^sed\s+-i\s+(['"]?)s\/([^/]*)\/([^/]*)\/\1\s+(\S+)$/.exec(cmd);
-  if (edit) return asCall(editSpec, { path: unquote(edit[4]), old: edit[2], new: edit[3] });
+  if (edit) return asCall(editSpec, { path: cleanPath(edit[4]), old: edit[2], new: edit[3] });
 
   return null;
 }
