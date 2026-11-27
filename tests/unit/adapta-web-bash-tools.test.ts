@@ -340,3 +340,31 @@ describe("shapes seen in the live debugging session", () => {
     assert.equal(classifyBashCommand(cmd, CLIENT_TOOLS), null);
   });
 });
+
+describe("cd <dir> && <command>", () => {
+  it("classifies the command and resolves relative paths against the directory", () => {
+    const r = classifyBashCommand("cd /root/x && sed -n '181,250p' tui.py", CLIENT_TOOLS);
+    assert.equal(r?.name, "read");
+    assert.deepEqual(r?.args, { path: "/root/x/tui.py" });
+  });
+
+  it("keeps the search pattern and resolves the file", () => {
+    const r = classifyBashCommand('cd /root/x && grep -n "a|b" tui.py', CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "a|b", path: "/root/x/tui.py" });
+  });
+
+  it("leaves a non-file command as shell", () => {
+    assert.equal(
+      classifyBashCommand("cd /root/x && python3 -m unittest discover -s tests", CLIENT_TOOLS),
+      null
+    );
+  });
+});
+
+describe("fence glued to prose", () => {
+  it("cuts at the fence that carries narration", () => {
+    const reply = "```bash\nsed -n '181,250p' tui.py ```Vou substituir o campo\n```";
+    assert.equal(extractCommand(reply), "sed -n '181,250p' tui.py");
+  });
+});

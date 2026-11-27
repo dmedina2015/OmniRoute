@@ -46,7 +46,14 @@ const ANY_FENCE_OPEN_RE = /```[^\S\n]*\n/;
  * Only that adjacent-fence shape is cut, so a real heredoc survives.
  */
 function cutAtGluedFence(command: string): string {
-  return command.split(/`{6,}(?:bash|sh|shell|zsh)?\s*\r?\n/)[0].trim();
+  // Two blocks glued: closing fence immediately followed by the next opening fence.
+  const glued = command.split(/`{6,}(?:bash|sh|shell|zsh)?\s*\r?\n/)[0];
+  // "cmd ```Vou substituir o campo": a fence whose line still carries prose after the
+  // (optional) language token is a boundary, not part of the command. A heredoc line
+  // like "```js" has nothing after the token, so it survives.
+  const fence = /```[A-Za-z0-9+#.-]*([^\n]*)/.exec(glued);
+  if (fence && fence[1] && fence[1].trim()) return glued.slice(0, fence.index).trim();
+  return glued.trim();
 }
 
 function stripLanguageLabel(command: string): string {
@@ -113,6 +120,19 @@ const OLD_ARGS = ["oldString", "old_string", "oldText", "search"] as const;
 const NEW_ARGS = ["newString", "new_string", "newText", "replace"] as const;
 
 const OPTIONAL_FIELDS = new Set(["include"]);
+
+/** Make relative path-like arguments absolute against a working directory. */
+function absolutizePaths(args: Record<string, unknown>, dir: string): Record<string, unknown> {
+  const base = dir.replace(/\/+$/, "");
+  const out: Record<string, unknown> = { ...args };
+  for (const [key, value] of Object.entries(out)) {
+    if (typeof value !== "string") continue;
+    if (!/path|file|dir|cwd/i.test(key)) continue;
+    if (!value || value.startsWith("/") || value.startsWith("~")) continue;
+    out[key] = `${base}/${value}`;
+  }
+  return out;
+}
 
 /**
  * True when a shell operator appears OUTSIDE quotes.
@@ -224,6 +244,17 @@ export function classifyBashCommand(
   tools: unknown
 ): { name: string; args: Record<string, unknown> } | null {
   const cmd = command.trim();
+
+  // "cd <dir> && <command>" only selects a working directory. Classify the command and
+  // resolve its relative paths against <dir>, instead of dropping the whole call to
+  // shell just because of the prefix.
+  const cd = /^cd\s+([^\s;&|]+)\s*(?:&&|;)\s*([\s\S]+)$/.exec(cmd);
+  if (cd) {
+    const dir = unquote(cd[1]);
+    const inner = classifyBashCommand(cd[2].trim(), tools);
+    if (inner) return { name: inner.name, args: absolutizePaths(inner.args, dir) };
+    return null;
+  }
   // Operators are judged on the FIRST line only: a heredoc body legitimately contains
   // "(" and ")" (python code), and those are content, not subshells.
   const firstLine = cmd.split(/\r?\n/)[0];
