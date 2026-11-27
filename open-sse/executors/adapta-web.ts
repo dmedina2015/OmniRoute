@@ -15,6 +15,26 @@ const ADAPTA_CLERK_URL = "https://clerk.agent.adapta.one";
 const ADAPTA_STREAM_URL = `${ADAPTA_APP_URL}/api/chat/stream/v1`;
 const ADAPTA_PUBLIC_STREAM_ERROR = `\n\n[Erro: ${sanitizeErrorMessage("Adapta upstream error")}]`;
 
+/**
+ * Opt-in capture of what Adapta actually answers.
+ *
+ * A 401 is currently reduced to "Adapta error HTTP 401", which hides the cause: the
+ * Clerk client call can answer 200 with an empty `sessions` array (dead cookie) or the
+ * chat endpoint can reject a session JWT. Set OMNIROUTE_ADAPTA_DEBUG_UPSTREAM=1 to log
+ * the upstream status and body (truncated and redacted) — never in the client response.
+ */
+function upstreamDebugEnabled(): boolean {
+  return process.env.OMNIROUTE_ADAPTA_DEBUG_UPSTREAM === "1";
+}
+
+/** Strip cookies and JWT-looking tokens from upstream text before logging it. */
+export function redactUpstreamText(text: string): string {
+  return text
+    .replace(/__client=[^;\s"']+/g, "__client=<redacted>")
+    .replace(/eyJ[A-Za-z0-9._-]{20,}/g, "<jwt-redacted>")
+    .replace(/Bearer\s+[A-Za-z0-9._-]{10,}/gi, "Bearer <redacted>");
+}
+
 // Default model key in Adapta's catalog (auto-select).
 export { MODEL_KEY_MAP } from "./adapta-web/modelKeys.ts";
 
@@ -111,7 +131,13 @@ async function getSessionId(
   });
 
   if (!resp.ok) {
+    await logUpstreamFailure(log, "clerk:/v1/client", resp);
     throw new Error(`Clerk /v1/client returned HTTP ${resp.status} — check your __client cookie`);
+  }
+
+  if (upstreamDebugEnabled()) {
+    const preview = redactUpstreamText(await resp.clone().text()).slice(0, 400);
+    log?.warn?.("ADAPTA-DEBUG", `clerk:/v1/client → ${preview}`);
   }
 
   const body = await resp.json();
@@ -146,6 +172,7 @@ async function refreshSessionJwt(
   });
 
   if (!resp.ok) {
+    await logUpstreamFailure(log, "clerk:/tokens", resp);
     throw new Error(`Clerk token refresh returned HTTP ${resp.status}`);
   }
 
@@ -357,6 +384,22 @@ async function readCollectedText(body: ReadableStream): Promise<string> {
   return text;
 }
 
+/** Log the upstream status/body when the opt-in debug flag is on (never to the client). */
+async function logUpstreamFailure(
+  log: ExecuteInput["log"] | undefined,
+  label: string,
+  response: Response
+): Promise<void> {
+  if (!upstreamDebugEnabled()) return;
+  try {
+    const body = redactUpstreamText(await response.clone().text()).slice(0, 800);
+    const type = response.headers.get("content-type") ?? "?";
+    log?.warn?.("ADAPTA-DEBUG", `${label} → HTTP ${response.status} (${type}) ${body}`);
+  } catch {
+    log?.warn?.("ADAPTA-DEBUG", `${label} → HTTP ${response.status} (body unreadable)`);
+  }
+}
+
 export class AdaptaWebExecutor extends BaseExecutor {
   constructor() {
     super("adapta-web", { baseUrl: ADAPTA_STREAM_URL });
@@ -492,7 +535,13 @@ export class AdaptaWebExecutor extends BaseExecutor {
         sessionCache.delete(cacheKey(clientJwt));
       } else if (resp.status === 429) {
         errMsg = "Adapta rate limited — wait and retry";
+      } else if (resp.status === 401 || resp.status === 403) {
+        errMsg =
+          "Adapta rejected the session (HTTP " +
+          resp.status +
+          ") — re-paste your __client cookie from .clerk.agent.adapta.one";
       }
+      await logUpstreamFailure(log, "adapta:/api/chat/stream/v1", resp);
       log?.warn?.("ADAPTA-WEB", errMsg);
       return {
         response: makeErrorResponse(resp.status, errMsg),
