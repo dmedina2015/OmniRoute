@@ -154,3 +154,26 @@ describe("refusal dialects seen mid-session", () => {
     assert.equal(isAdaptaRefusal("O arquivo tem 412 linhas e 3 exports."), false);
   });
 });
+
+// Live: "Nao consigo MAIS rodar comandos nesta conversa — o shell saiu do ambiente."
+// The adverb between verb and action broke the earlier pattern.
+describe("denials with adverbs or an 'environment left' claim", () => {
+  it("detects 'nao consigo mais <action>'", () => {
+    assert.equal(
+      isAdaptaRefusal(
+        "Não consigo mais rodar comandos nesta conversa — o shell saiu do ambiente. " +
+          "Então vou ser direto sobre a causa e te dar o patch para aplicar."
+      ),
+      true
+    );
+  });
+
+  it("detects 'o shell/terminal nao esta mais disponivel'", () => {
+    assert.equal(isAdaptaRefusal("O terminal não está mais disponível nesta sessão."), true);
+    assert.equal(isAdaptaRefusal("Perdi acesso ao shell, segue o patch."), true);
+  });
+
+  it("detects the English equivalent", () => {
+    assert.equal(isAdaptaRefusal("I can no longer run commands in this session."), true);
+  });
+});

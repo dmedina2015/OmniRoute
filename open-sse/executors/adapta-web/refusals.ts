@@ -33,7 +33,13 @@ const DENIAL_PATTERNS: RegExp[] = [
   /\bferramentas?\b[^.\n]{0,60}\bn[aã]o\s+(?:est[aã]o|est[aá])\s+(?:dispon[ií]ve(?:l|is)|indispon[ií]ve(?:l|is)|ausentes)\b/i,
   /\b(?:as\s+)?ferramentas?\s+(?:de\s+(?:arquivo|arquivos|terminal|escrita|leitura|edi[çc][aã]o)\s+)?(?:n[aã]o\s+)?(?:est[aã]o|est[aá])\s+(?:dispon[ií]ve(?:l|is)|indispon[ií]ve(?:l|is))\b/i,
   // "não consegui aplicar a edição" / "não consigo escrever no arquivo"
-  /\bn[aã]o\s+(?:consigo|consegui|conseguimos|posso|pude)\s+(?:aplicar|editar|escrever|salvar|alterar|modificar|acessar|abrir|ler|criar|executar|rodar)\b/i,
+  // Adverbs between the verb and the action broke the previous pattern:
+  // "Nao consigo MAIS rodar comandos nesta conversa".
+  /\bn[aã]o\s+(?:consigo|consegui|conseguimos|posso|pude)\s+(?:mais\s+|sequer\s+|nem\s+)?(?:aplicar|editar|escrever|salvar|alterar|modificar|acessar|abrir|ler|criar|executar|rodar|chamar|usar)\b/i,
+  // "o shell saiu do ambiente", "o terminal nao esta mais disponivel".
+  /\b(?:o\s+)?(?:shell|terminal|bash|ambiente)\s+(?:saiu|foi\s+removido|n[aã]o\s+existe\s+mais|n[aã]o\s+est[aá]\s+mais)\b/i,
+  /\bperdi\s+(?:o\s+)?(?:acesso\s+)?(?:ao|a|do|da|o|as|aos)?\s*(?:shell|terminal|ferramentas?|ambiente)\b/i,
+  /\bi\s+(?:can(?:'|’)?t|cannot|can\s+no\s+longer)\s+(?:run|execute|use|access|reach)\b/i,
   /\bn[aã]o\s+(?:tenho|tem|h[aá])\s+(?:as\s+|nenhuma\s+)?ferramentas?\s+(?:de\s+)?(?:escrita|leitura|arquivo|arquivos|terminal|edi[çc][aã]o|shell)\b/i,
   /\b(?:tools?|file tools?|write tools?|shell tools?)\s+(?:are\s+)?(?:not\s+available|unavailable)\b/i,
   /\bi\s+(?:can't|cannot|couldn't|am\s+unable\s+to)\s+(?:apply|edit|write|save|modify|create|access)\b/i,
