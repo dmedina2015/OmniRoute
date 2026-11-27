@@ -1,11 +1,34 @@
 import { buildToolAwareResult } from "../../translator/webTools.ts";
-import { classifyBashCommand, extractCommand, shellToolName } from "./bash.ts";
+import {
+  classifyBashCommand,
+  extractCommand,
+  looksLikeShellCommand,
+  shellToolName,
+} from "./bash.ts";
+import { readToolSpecs } from "./toolSchema.ts";
 import type { OpenAIToolCallMsg } from "./types.ts";
 
 export interface AdaptaToolAwareResult {
   content: string;
   toolCalls: OpenAIToolCallMsg[] | null;
   finishReason: string;
+}
+
+function callSatisfiesSchema(call: OpenAIToolCallMsg, tools: unknown): boolean {
+  const name = call.function?.name;
+  if (!name) return false;
+  const spec = readToolSpecs(tools).find((s) => s.name === name);
+  // A call for a tool the client never declared would also be rejected by the client.
+  if (!spec) return false;
+  let args: Record<string, unknown>;
+  try {
+    args = JSON.parse(call.function?.arguments || "{}") as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+  return spec.required.every(
+    (key) => args[key] !== undefined && args[key] !== null && args[key] !== ""
+  );
 }
 
 const FENCED_BLOCK_RE = /```(?:bash|sh|shell|zsh)?[^\S\n]*\n[\s\S]*?```/g;
@@ -25,10 +48,23 @@ export function buildAdaptaToolAwareResult(
   idSeed = "adp"
 ): AdaptaToolAwareResult {
   const structured = buildToolAwareResult(text, tools, idSeed);
-  if (structured.toolCalls) return structured;
+  if (structured.toolCalls) {
+    // The shared parser passes a <tool> envelope through without checking it against
+    // the tool's own schema; an envelope with required fields missing reached the
+    // client as an invalid call ("read: path missing"). Only keep calls that satisfy
+    // the declared schema, otherwise fall back to the text.
+    return structured.toolCalls.every((call) => callSatisfiesSchema(call, tools))
+      ? structured
+      : { ...structured, toolCalls: null, finishReason: "stop" };
+  }
 
   const command = extractCommand(text);
   if (!command) return structured;
+
+  // Pasted file content is not a command: asked to show a file, models often put the
+  // file's text inside a ```bash block. Executing that produced a loop of identical
+  // shell calls (the client ran prose, failed, the model retried).
+  if (!looksLikeShellCommand(command)) return structured;
 
   const classified = classifyBashCommand(command, tools);
   const shell = shellToolName(tools);

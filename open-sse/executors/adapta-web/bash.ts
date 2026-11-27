@@ -250,3 +250,39 @@ export function shellToolName(tools: unknown): string | null {
   const spec = findToolSpec(readToolSpecs(tools), "bash", "shell", "terminal", "exec");
   return spec?.name ?? null;
 }
+
+/**
+ * Commands the adapter is willing to execute as a shell call.
+ *
+ * Observed loop: asked to show a file, the model pasted the file's TEXT inside a
+ * ```bash block. The parser turned it into `shell({command: "Olá, tudo bem?"})`; the
+ * client ran it, failed, and the model repeated — fifteen identical calls in one
+ * session. A block is only a command if its first token actually is one.
+ */
+const SHELL_COMMANDS = new Set(
+  `ls cat echo printf cd pwd mkdir rmdir rm cp mv ln touch chmod chown chgrp stat file realpath
+   readlink basename dirname find grep egrep fgrep rg sed awk gawk cut tr sort uniq wc head tail
+   tee xargs split csplit paste join column diff patch cmp md5sum sha1sum sha256sum shasum base64
+   openssl tar gzip gunzip bzip2 xz zip unzip 7z git gh npm npx pnpm yarn bun node deno tsc tsx
+   python python2 python3 pip pip3 uv poetry go cargo rustc javac java mvn gradle dotnet php ruby
+   gem rake perl make cmake ninja docker podman kubectl helm terraform ansible curl wget ssh scp
+   rsync nc telnet ping traceroute dig nslookup host ss netstat ps top htop kill pkill killall df
+   du free env printenv export unset set source shopt alias which type command test true false
+   sleep time date uname whoami id groups sudo su systemctl service journalctl apt apt-get dnf
+   yum pacman apk brew snap flatpak jq yq watch nohup timeout seq expr bc tree less more vi vim
+   nano code open xdg-open`
+    .split(/\s+/)
+    .filter(Boolean)
+);
+
+/** True when a fenced block plausibly is a shell command and not pasted file content. */
+export function looksLikeShellCommand(command: string): boolean {
+  const firstLine = command.trim().split(/\r?\n/)[0]?.trim() ?? "";
+  if (!firstLine) return false;
+  // Absolute/relative path execution: /usr/bin/x, ./script.sh, ~/bin/y
+  if (/^(?:\.{0,2}\/|~\/)/.test(firstLine)) return true;
+  // Env-assignment prefix: FOO=bar cmd ...
+  const withoutEnv = firstLine.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "");
+  const first = withoutEnv.split(/\s+/)[0] ?? "";
+  return SHELL_COMMANDS.has(first);
+}
