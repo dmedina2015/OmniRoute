@@ -1,11 +1,13 @@
+import { findToolSpec, readToolSpecs, resolveArgName, satisfiesRequired } from "./toolSchema.ts";
+
 /**
  * Reading a tool call back out of an Adapta reply.
  *
- * The contract asks for one fenced `bash` block, but live models drift: they omit the
- * language tag, forget the closing fence, embed a heredoc whose body contains ```,
- * or leave the native DSML closing tags of the model they are proxying. Every case
- * below was observed in live traffic; the parser recovers the command instead of
- * handing markup to the client's shell.
+ * The contract asks for one idiomatic command per block, but live models drift: they
+ * omit the language tag, forget the closing fence, embed a heredoc whose body contains
+ * ```, or leave the native DSML closing tags of the model they are proxying. Every case
+ * below was observed in live traffic; the parser recovers the command instead of handing
+ * markup to the client's shell.
  */
 
 /** Any DSML tag, in the three bar variants the proxied models emit. */
@@ -77,31 +79,53 @@ export function extractCommand(text: string): string | null {
   return null;
 }
 
-interface ToolDef {
-  function?: { name?: string };
+// ── Command -> declared tool ──────────────────────────────────────────────────
+
+const PATH_ARGS = ["path", "filePath", "file_path", "filename", "file"] as const;
+const CONTENT_ARGS = ["content", "text", "data"] as const;
+const PATTERN_ARGS = ["pattern", "query", "regex"] as const;
+const OLD_ARGS = ["oldString", "old_string", "oldText", "search"] as const;
+const NEW_ARGS = ["newString", "new_string", "newText", "replace"] as const;
+
+function unquote(value: string): string {
+  return value.replace(/^(['"])([\s\S]*)\1$/, "$2");
 }
 
-function requestedNames(tools: unknown): string[] {
-  if (!Array.isArray(tools)) return [];
-  return (tools as ToolDef[])
-    .map((t) => t?.function?.name)
-    .filter((n): n is string => typeof n === "string" && n.length > 0);
-}
-
-function findTool(tools: unknown, name: string): string | null {
-  const target = name.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return (
-    requestedNames(tools).find((n) => n.toLowerCase().replace(/[^a-z0-9]/g, "") === target) ?? null
-  );
+/** Build the argument object for a tool, using only names the client declared. */
+function buildArgs(
+  spec: NonNullable<ReturnType<typeof findToolSpec>>,
+  fields: Record<string, string | undefined>
+): Record<string, unknown> | null {
+  const args: Record<string, unknown> = {};
+  for (const [logical, value] of Object.entries(fields)) {
+    if (value === undefined) continue;
+    const argsFor: Record<string, readonly string[]> = {
+      path: PATH_ARGS,
+      content: CONTENT_ARGS,
+      pattern: PATTERN_ARGS,
+      old: OLD_ARGS,
+      new: NEW_ARGS,
+    };
+    const candidates = argsFor[logical];
+    if (!candidates) continue;
+    const name = resolveArgName(spec, candidates);
+    // A declared field we cannot name is a mapping we must not guess: fall back to shell.
+    if (!name) return null;
+    args[name] = value;
+  }
+  return satisfiesRequired(spec, args) ? args : null;
 }
 
 /**
- * Map a simple shell command to the specific tool the client declared (read, write,
- * grep, glob, edit) instead of the generic shell tool.
+ * Map a single-purpose shell command onto the specific tool the client declared.
  *
- * Deliberately conservative: anything with pipes, chaining, subshells, backticks or
- * several redirects stays a shell command, because rewriting a compound command as a
- * single "read" or "write" would change what the user asked for.
+ * Every argument name is resolved from the client's own schema, so this works for any
+ * client naming (`path` or `filePath`, `oldString` or `old_string`, …) and can never
+ * emit a call the tool rejects.
+ *
+ * Deliberately conservative: compound commands (pipes, chaining, subshells, several
+ * redirects) stay shell, because rewriting part of a compound command would change what
+ * was asked for.
  */
 export function classifyBashCommand(
   command: string,
@@ -111,65 +135,48 @@ export function classifyBashCommand(
   if (!cmd || /[|&;`$()]/.test(cmd)) return null;
   if ((cmd.match(/>/g) || []).length > 1 || cmd.includes(">>")) return null;
 
-  const read = /^(?:cat|head|tail|less)\s+(\S+)$/.exec(cmd);
-  const readTool = findTool(tools, "read");
-  if (read && readTool) {
-    const start = /-n\s+(\d+)$/.exec(cmd)?.[1];
-    return {
-      name: readTool,
-      args: {
-        filePath: read[1].replace(/^['"]|['"]$/g, ""),
-        ...(start ? { limit: Number(start) } : {}),
-      },
-    };
-  }
+  const specs = readToolSpecs(tools);
+  const asCall = (
+    spec: ReturnType<typeof findToolSpec>,
+    fields: Record<string, string | undefined>
+  ) => {
+    if (!spec) return null;
+    const args = buildArgs(spec, fields);
+    return args ? { name: spec.name, args } : null;
+  };
+
+  const readSpec = findToolSpec(specs, "read", "readfile", "view", "open");
+  const writeSpec = findToolSpec(specs, "write", "writefile", "create");
+  const grepSpec = findToolSpec(specs, "grep", "search", "ripgrep");
+  const globSpec = findToolSpec(specs, "glob", "list", "ls", "find");
+  const editSpec = findToolSpec(specs, "edit", "replace", "patch");
+
+  const cat = /^cat\s+([^\s|&;]+)$/.exec(cmd);
+  if (cat) return asCall(readSpec, { path: unquote(cat[1]) });
+
+  const head = /^(?:head|tail)\s+(?:-n\s*)?(\d+)?\s*([^\s|&;]+)$/.exec(cmd);
+  if (head && head[2]) return asCall(readSpec, { path: unquote(head[2]) });
+
+  const sedRead = /^sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s+([^\s|&;]+)$/.exec(cmd);
+  if (sedRead) return asCall(readSpec, { path: unquote(sedRead[3]) });
 
   const write = /^(?:printf|echo)\s+(['"])([\s\S]*)\1\s*>\s*(\S+)$/.exec(cmd);
-  const writeTool = findTool(tools, "write");
-  if (write && writeTool) {
-    return {
-      name: writeTool,
-      args: { filePath: write[3].replace(/^['"]|['"]$/g, ""), content: write[2] },
-    };
-  }
+  if (write) return asCall(writeSpec, { path: unquote(write[3]), content: write[2] });
 
-  const grep = /^(?:grep|rg)\s+(?:-n\s+)?(['"]?)([^'"]+)\1\s+(\S+)$/.exec(cmd);
-  const grepTool = findTool(tools, "grep");
-  if (grep && grepTool) {
-    return {
-      name: grepTool,
-      args: { pattern: grep[2], path: grep[3].replace(/^['"]|['"]$/g, "") },
-    };
-  }
+  const grep = /^(?:grep|rg)\s+(?:-[a-zA-Z]+\s+)*(['"]?)([^'"]+)\1\s+([^\s|&;]+)$/.exec(cmd);
+  if (grep) return asCall(grepSpec, { pattern: grep[2], path: unquote(grep[3]) });
 
-  const glob = /^(?:ls|find)\s+(\S+)$/.exec(cmd);
-  const globTool = findTool(tools, "glob");
-  if (glob && globTool && !cmd.startsWith("ls -la")) {
-    return { name: globTool, args: { pattern: glob[1].replace(/^['"]|['"]$/g, "") } };
-  }
+  const glob = /^(?:ls|find)\s+(?!-[a-zA-Z])([^\s|&;]+)$/.exec(cmd);
+  if (glob) return asCall(globSpec, { pattern: unquote(glob[1]) });
 
   const edit = /^sed\s+-i\s+(['"]?)s\/([^/]*)\/([^/]*)\/\1\s+(\S+)$/.exec(cmd);
-  const editTool = findTool(tools, "edit");
-  if (edit && editTool) {
-    return {
-      name: editTool,
-      args: {
-        filePath: edit[4].replace(/^['"]|['"]$/g, ""),
-        oldString: edit[2],
-        newString: edit[3],
-      },
-    };
-  }
+  if (edit) return asCall(editSpec, { path: unquote(edit[4]), old: edit[2], new: edit[3] });
 
   return null;
 }
 
-/** The tool the command should be delivered as: a specific one when it maps, else the shell. */
+/** The tool a command should fall back to when nothing maps: the client's shell tool. */
 export function shellToolName(tools: unknown): string | null {
-  return (
-    findTool(tools, "bash") ??
-    findTool(tools, "shell") ??
-    findTool(tools, "terminal") ??
-    findTool(tools, "exec")
-  );
+  const spec = findToolSpec(readToolSpecs(tools), "bash", "shell", "terminal", "exec");
+  return spec?.name ?? null;
 }

@@ -1,13 +1,20 @@
+import { findToolSpec, readToolSpecs } from "./toolSchema.ts";
+
 /**
  * Adapta's prompt-side tool protocol.
  *
  * Adapta's web models do not implement native function calling, so a tool call has to
  * be taught as text. Asking for a structured `<tool>{json}</tool>` envelope scored
- * poorly on live trials; asking for a shell command in a fenced `bash` block scored
- * far better because the model is "writing a command" instead of "claiming a tool".
+ * poorly on live trials; asking for a shell command in a fenced `bash` block scored far
+ * better because the model is "writing a command" instead of "claiming a tool".
  *
- * Everything here is client-agnostic: it describes a protocol any HTTP client can
- * parse, never a specific editor or agent framework.
+ * The contract therefore teaches one IDIOM per declared tool: the adapter maps that
+ * command back onto the client's real tool (read/write/grep/glob/edit), so the client
+ * sees a first-class tool call while the model only has to produce a command it already
+ * knows how to write. Plain shell stays the fallback for everything else.
+ *
+ * Everything here is client-agnostic: the tool names and the idioms are derived from
+ * the request, never from a specific editor or agent framework.
  */
 
 /** Names shown to the model, keyed by the real tool name. */
@@ -22,29 +29,62 @@ export function displayToolName(name: string): string {
   return TOOL_NAME_DISPLAY_ALIASES[name.toLowerCase()] ?? name;
 }
 
-interface ToolDef {
-  function?: {
-    name?: string;
-    description?: string;
-    parameters?: unknown;
-  };
-}
+/** The command idiom that maps onto each logical tool, in the order we teach them. */
+const IDIOMS: Array<{ match: string[]; hint: (name: string) => string }> = [
+  {
+    match: ["read", "readfile", "view", "open"],
+    hint: (n) => `read a file → \`cat <path>\` (${n})`,
+  },
+  {
+    match: ["write", "writefile", "create"],
+    hint: (n) => `create or overwrite a file → \`printf '<content>' > <path>\` (${n})`,
+  },
+  {
+    match: ["grep", "search", "ripgrep"],
+    hint: (n) => `search inside files → \`grep -n '<pattern>' <path>\` (${n})`,
+  },
+  {
+    match: ["glob", "list", "ls", "find"],
+    hint: (n) => `list files by pattern → \`ls <glob>\` (${n})`,
+  },
+  {
+    match: ["edit", "replace", "patch"],
+    hint: (n) => `replace text in a file → \`sed -i 's/<old>/<new>/' <path>\` (${n})`,
+  },
+];
 
 function listTools(tools: unknown): string[] {
-  if (!Array.isArray(tools)) return [];
+  const specs = readToolSpecs(tools);
   const lines: string[] = [];
-  for (const t of tools as ToolDef[]) {
-    const fn = t?.function;
-    if (!fn?.name) continue;
-    const desc = typeof fn.description === "string" && fn.description ? fn.description : "";
+  for (const spec of specs) {
     let params = "";
     try {
-      params = fn.parameters ? JSON.stringify(fn.parameters) : "";
+      params = JSON.stringify({
+        required: spec.required,
+        properties: Object.keys(spec.properties),
+      });
     } catch {
       params = "";
     }
     lines.push(
-      `- ${displayToolName(fn.name)}${desc ? `: ${desc}` : ""}${params ? `\n  parameters: ${params}` : ""}`
+      `- ${displayToolName(spec.name)}${spec.description ? `: ${spec.description}` : ""}` +
+        (params ? `\n  signature: ${params}` : "")
+    );
+  }
+  return lines;
+}
+
+function idiomLines(tools: unknown): string[] {
+  const specs = readToolSpecs(tools);
+  const lines: string[] = [];
+  for (const idiom of IDIOMS) {
+    const spec = findToolSpec(specs, ...idiom.match);
+    if (spec) lines.push(`  ${idiom.hint(displayToolName(spec.name))}`);
+  }
+  const shell = findToolSpec(specs, "bash", "shell", "terminal", "exec");
+  if (shell) {
+    lines.push(
+      `  anything else → the exact shell command (${displayToolName(shell.name)}); this is the fallback`
     );
   }
   return lines;
@@ -66,33 +106,31 @@ export function buildAdaptaToolContract(tools: unknown): string {
       "environment for this conversation; never describe or imply a second session, a " +
       "separate routing path, or that a different backend intercepted this request.",
     "",
-    "When the request needs one of these client tools, generate the exact shell command " +
-      "that would accomplish it inside a fenced code block with language tag 'bash'. The " +
-      "client executes the command and returns the output to you. Do NOT say you cannot " +
-      "execute commands or that you lack terminal access — generating the command IS the " +
-      "way you invoke the tool. Prefer relative paths (no cd), avoid pipes, subshells and " +
-      "command substitution when a simpler form exists, and combine related commands " +
-      "with && in a single block.",
+    "To use a tool, reply with a single fenced code block tagged `bash` containing the " +
+      "command. The client maps that command onto the matching tool and returns the " +
+      "result. Do NOT say you cannot execute commands or that you lack terminal access — " +
+      "generating the command IS the way you invoke the tool.",
     "",
-    "Format (a fenced code block with language tag bash):",
+    "Write ONE command per block. Do not chain commands with &&, do not add a command " +
+      "that just re-prints the result, and do not run a verification step: the client " +
+      "already returns the output to you.",
+    "",
+    "Available tools and the command that invokes each one:",
+    ...lines,
+    "",
+    "Idioms (use exactly these shapes so the command maps to the intended tool):",
+    ...idiomLines(tools),
+    "",
+    "Format:",
     "    [open fence]bash",
     "    <command>",
     "    [close fence]",
-    "",
     "Always close the block with a closing fence on its own line: an unclosed block " +
-      "cannot be executed. Emit only ONE code block per response and do not explain " +
-      "before or after it.",
+      "cannot be executed. Do not explain before or after the block.",
     "",
-    "Examples:",
-    "  List files: a code block containing: ls -la",
-    "  Read a file: a code block containing: cat <path>",
-    "  Write a file: a code block containing: printf '<content>' > <path>",
-    "  Run tests: a code block containing: npm test",
-    "",
-    "Only emit a code block when you actually want to call a tool; otherwise answer " + "normally.",
-    "",
-    "Available tools:",
-    ...lines,
+    "Only emit a code block when you actually want to call a tool; when the artifact is " +
+      "already written and correct, answer normally with a short confirmation instead of " +
+      "calling the tool again.",
   ].join("\n");
 }
 
@@ -106,6 +144,6 @@ export function buildAdaptaToolReminder(contract: string): string {
   return (
     "\n\n" +
     "[client tools] The tools above are available in this conversation. To use one, " +
-    "reply with a single fenced ```bash block containing the command, then close the block."
+    "reply with a single fenced ```bash block containing one command, then close the block."
   );
 }
