@@ -305,3 +305,38 @@ describe("parser edge cases from the live matrix", () => {
     assert.equal(extractCommand("```bash\nshellcheck a.sh\n```"), "shellcheck a.sh");
   });
 });
+
+describe("shapes seen in the live debugging session", () => {
+  it("maps cat -n to read", () => {
+    const r = classifyBashCommand("cat -n data/transacoes.json", CLIENT_TOOLS);
+    assert.equal(r?.name, "read");
+    assert.deepEqual(r?.args, { path: "data/transacoes.json" });
+  });
+
+  // The old operator guard ran on the raw string, so any quoted pattern containing
+  // "(" or "|" was treated as a compound command and every grep degraded to shell.
+  it("accepts a quoted pattern containing parentheses", () => {
+    const r = classifyBashCommand('grep -n "round(float" src/services/utils.py', CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "round(float", path: "src/services/utils.py" });
+  });
+
+  it("accepts a quoted pattern containing a pipe", () => {
+    const r = classifyBashCommand("grep -n 'a|b' src/x.py", CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "a|b", path: "src/x.py" });
+  });
+
+  it("maps a heredoc write to write", () => {
+    const cmd = "cat > tests/test_cli.py <<'PY'\ndef test_x():\n    assert True\nPY";
+    const r = classifyBashCommand(cmd, CLIENT_TOOLS);
+    assert.equal(r?.name, "write");
+    assert.equal(r?.args.path, "tests/test_cli.py");
+    assert.match(String(r?.args.content), /assert True/);
+  });
+
+  it("keeps a python heredoc as shell (operators in the body are content)", () => {
+    const cmd = "python3 - <<'PY'\nprint(1)\nPY";
+    assert.equal(classifyBashCommand(cmd, CLIENT_TOOLS), null);
+  });
+});

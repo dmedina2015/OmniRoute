@@ -115,6 +115,33 @@ const NEW_ARGS = ["newString", "new_string", "newText", "replace"] as const;
 const OPTIONAL_FIELDS = new Set(["include"]);
 
 /**
+ * True when a shell operator appears OUTSIDE quotes.
+ *
+ * The previous check ran on the raw string, so a quoted pattern containing "(" or "|"
+ * ("grep -n \"round(float\" file") was treated as a compound command and fell back to
+ * shell — every real search degraded to shell for that reason.
+ */
+function hasOperatorOutsideQuotes(input: string): boolean {
+  let quote: string | null = null;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (quote) {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "|" || ch === ";" || ch === "`" || ch === "(" || ch === ")") return true;
+    if (ch === "&" && input[i + 1] === "&") return true;
+    if (ch === "$" && input[i + 1] === "(") return true;
+  }
+  return false;
+}
+
+/**
  * Split a command into tokens, honouring single/double quotes.
  *
  * Needed because a flag may appear AFTER the pattern ("grep -n 'bem' -r dir"), which a
@@ -197,7 +224,10 @@ export function classifyBashCommand(
   tools: unknown
 ): { name: string; args: Record<string, unknown> } | null {
   const cmd = command.trim();
-  if (!cmd || /[|&;`$()]/.test(cmd)) return null;
+  // Operators are judged on the FIRST line only: a heredoc body legitimately contains
+  // "(" and ")" (python code), and those are content, not subshells.
+  const firstLine = cmd.split(/\r?\n/)[0];
+  if (!cmd || hasOperatorOutsideQuotes(firstLine)) return null;
   if ((cmd.match(/>/g) || []).length > 1 || cmd.includes(">>")) return null;
 
   const specs = readToolSpecs(tools);
@@ -216,8 +246,22 @@ export function classifyBashCommand(
   const globSpec = findToolSpec(specs, "glob", "list", "ls", "find");
   const editSpec = findToolSpec(specs, "edit", "replace", "patch");
 
-  const cat = /^cat\s+([^\s|&;]+)$/.exec(cmd);
+  const cat = /^cat\s+(?:-\S+\s+)*([^\s|&;]+)$/.exec(cmd);
   if (cat) return asCall(readSpec, { path: unquote(cat[1]) });
+
+  // Heredoc write: cat > file <<'EOF' ... EOF  (the usual way a model writes a file).
+  const heredocWrite =
+    /^cat\s*>\s*([^\s]+)\s*<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2\s*\n([\s\S]*?)\n\3\s*$/.exec(
+      cmd
+    );
+  if (heredocWrite) {
+    return asCall(writeSpec, { path: unquote(heredocWrite[1]), content: heredocWrite[4] });
+  }
+
+  const nlRead = /^nl\s+(?:-\S+\s+)*([^\s|&;]+)$/.exec(cmd);
+  if (nlRead) return asCall(readSpec, { path: unquote(nlRead[1]) });
+  const batRead = /^bat\s+(?:-\S+\s+)*([^\s|&;]+)$/.exec(cmd);
+  if (batRead) return asCall(readSpec, { path: unquote(batRead[1]) });
 
   const head = /^(?:head|tail)\s+(?:-n\s*)?(\d+)?\s*([^\s|&;]+)$/.exec(cmd);
   if (head && head[2]) return asCall(readSpec, { path: unquote(head[2]) });
