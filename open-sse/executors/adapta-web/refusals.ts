@@ -61,10 +61,35 @@ function normalize(text: string | null | undefined): string | null {
 }
 
 /** True when the reply declines to use the client tools instead of using them. */
+/**
+ * Structural signal: a tool/execution noun and a negative availability state in the same
+ * sentence, in either order.
+ *
+ * The model keeps inventing new phrasings ("o shell ficou indisponível", "o ambiente
+ * parou de aceitar execução de comandos", "não consigo mais gravar/rodar nada"), and
+ * chasing each one with a dedicated pattern produced five fixes in a row. This catches
+ * the family: it only fires when the sentence is about the ENVIRONMENT being unavailable,
+ * not when it reports that a command failed (which is a normal tool result).
+ */
+const ENVIRONMENT_NOUN =
+  /\b(?:shell|terminal|bash|ambiente|ferramentas?|execu[çc][aã]o|comandos?)\b/i;
+const UNAVAILABLE_STATE =
+  /\b(?:indispon[ií]ve(?:l|is)|inativ[oa]s?|bloquead[oa]s?|rejeitad[oa]s?|saiu|perdi|parou\s+de|n[aã]o\s+(?:est[aá]|esta|aceita|responde|existe|consigo|posso|tenho|h[aá])|unavailable|not\s+available|no\s+longer|failed\s+to\s+(?:accept|respond))\b/i;
+
+function sentenceMentionsUnavailableEnvironment(text: string): boolean {
+  for (const sentence of text.split(/(?<=[.!?\n])\s+/)) {
+    if (ENVIRONMENT_NOUN.test(sentence) && UNAVAILABLE_STATE.test(sentence)) return true;
+  }
+  return false;
+}
+
 export function isAdaptaRefusal(text: string | null | undefined): boolean {
   const trimmed = normalize(text);
   if (!trimmed) return false;
-  return DENIAL_PATTERNS.some((re) => re.test(trimmed));
+  return (
+    DENIAL_PATTERNS.some((re) => re.test(trimmed)) ||
+    sentenceMentionsUnavailableEnvironment(trimmed)
+  );
 }
 
 const PROMISE_MAX_CHARS = 500;

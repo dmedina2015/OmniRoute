@@ -242,3 +242,28 @@ describe("refusal after a failing tool call", () => {
     }
   });
 });
+
+// Five refusal phrasings in a row motivated a structural detector: a tool/execution noun
+// plus a negative availability state in the same sentence, in either order.
+describe("structural refusal detection", () => {
+  it("detects the environment-unavailable family", () => {
+    const family = [
+      "O ambiente parou de aceitar execução de comandos no meio da tarefa — o shell ficou indisponível e não consigo mais gravar/rodar nada nesta sessão.",
+      "Não consigo mais rodar comandos nesta conversa — o shell saiu do ambiente.",
+      "as ferramentas de arquivo e terminal não estão disponíveis agora",
+      "O terminal ficou indisponível.",
+      "The shell is unavailable in this session.",
+    ];
+    for (const text of family) assert.equal(isAdaptaRefusal(text), true, text.slice(0, 40));
+  });
+
+  it("never flags a failing tool report or a normal answer", () => {
+    const controls = [
+      "O comando falhou com SyntaxError na linha 575 e o arquivo segue quebrado.",
+      "O arquivo tem 412 linhas e 3 exports.",
+      "Não consegui entender o requisito, pode explicar?",
+      "Segue o patch completo para você aplicar em _acao_nova.",
+    ];
+    for (const text of controls) assert.equal(isAdaptaRefusal(text), false, text.slice(0, 40));
+  });
+});
