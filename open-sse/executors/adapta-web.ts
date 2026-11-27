@@ -665,6 +665,21 @@ export class AdaptaWebExecutor extends BaseExecutor {
               : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
         );
 
+        // A generation can take longer than a Clerk session JWT lives (>60s), so reusing
+        // the header from the first attempt sent an expired token and Adapta answered a
+        // legitimate 401. Re-mint before every retry.
+        try {
+          const freshJwt = await getSessionJwt(clientJwt, signal, log);
+          headers.Authorization = `Bearer ${freshJwt}`;
+        } catch (refreshError) {
+          log?.warn?.(
+            "ADAPTA-WEB",
+            `Could not refresh the session before retry: ${sanitizeErrorMessage(
+              refreshError instanceof Error ? refreshError.message : String(refreshError)
+            )}`
+          );
+        }
+
         const retryResp = await fireRequest(
           buildCorrectiveNudge(empty ? "empty" : promisedOnly ? "promise" : "refusal", {
             lastToolError: lastToolError(effectiveMessages),
