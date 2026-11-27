@@ -30,6 +30,17 @@ export function stripDsmlResidue(text: string): string {
 const BASH_OPEN_RE = /```(?:bash|sh|shell|zsh)[^\S\n]*\n/;
 const ANY_FENCE_OPEN_RE = /```[^\S\n]*\n/;
 
+/**
+ * Drop a language label the model repeated INSIDE the block.
+ *
+ * Observed live: the reply was "```bash\nbash\nls /tmp/*.txt\n```" — the model copied
+ * the fence tag into the command, so the "command" started with the word bash and
+ * matched nothing. Only an exact first-line label is removed.
+ */
+function stripLanguageLabel(command: string): string {
+  return command.replace(/^(?:bash|sh|shell|zsh)[ \t]*\r?\n/, "").trim();
+}
+
 function countFences(text: string): number {
   return (text.match(/```/g) || []).length;
 }
@@ -47,12 +58,12 @@ export function extractCommand(text: string): string | null {
 
   // Tagged, closed. Greedy to the LAST closing fence so a heredoc survives.
   const tagged = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]*)```/.exec(clean);
-  if (tagged && tagged[1].trim()) return tagged[1].trim();
+  if (tagged && tagged[1].trim()) return stripLanguageLabel(tagged[1]);
 
   // Tagged, unclosed.
   if (BASH_OPEN_RE.test(clean) && countFences(clean) % 2 === 1) {
     const open = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]+)/.exec(clean);
-    if (open && open[1].trim()) return open[1].trim();
+    if (open && open[1].trim()) return stripLanguageLabel(open[1]);
   }
 
   // Untagged, closed: take the largest block.
@@ -64,7 +75,8 @@ export function extractCommand(text: string): string | null {
   }
   if (fences.length > 0) {
     const best = fences.sort((a, b) => b.length - a.length)[0];
-    if (!best.startsWith("{") && !best.startsWith("[") && !best.startsWith("<")) return best;
+    if (!best.startsWith("{") && !best.startsWith("[") && !best.startsWith("<"))
+      return stripLanguageLabel(best);
   }
 
   // Untagged, unclosed.
@@ -72,7 +84,7 @@ export function extractCommand(text: string): string | null {
     const open = /```\s*\n([\s\S]+)/.exec(clean);
     const body = open?.[1]?.trim();
     if (body && !body.startsWith("{") && !body.startsWith("[") && !body.startsWith("<")) {
-      return body;
+      return stripLanguageLabel(body);
     }
   }
 
@@ -89,6 +101,39 @@ const OLD_ARGS = ["oldString", "old_string", "oldText", "search"] as const;
 const NEW_ARGS = ["newString", "new_string", "newText", "replace"] as const;
 
 const OPTIONAL_FIELDS = new Set(["include"]);
+
+/**
+ * Split a command into tokens, honouring single/double quotes.
+ *
+ * Needed because a flag may appear AFTER the pattern ("grep -n 'bem' -r dir"), which a
+ * single "flags first" regex cannot express.
+ */
+function splitArgs(input: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  for (const ch of input) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        out.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current) out.push(current);
+  return out;
+}
 
 function unquote(value: string): string {
   return value.replace(/^(['"])([\s\S]*)\1$/, "$2");
@@ -173,16 +218,22 @@ export function classifyBashCommand(
 
   // Flags may be short (-rn, -i) or long with an optional value (--include='*'),
   // which is what models actually write: "grep -rn --include='*' -i 'bem' <dir>".
-  const grep =
-    /^(?:grep|rg)\s+((?:--?[A-Za-z][\w-]*(?:=(?:'[^']*'|"[^"]*"|\S+))?\s+)*)(['"]?)([^'"]+)\2\s+([^\s|&;]+)$/.exec(
-      cmd
-    );
-  if (grep) {
-    const includeMatch = /--include=(?:'([^']*)'|"([^"]*)"|(\S+))/.exec(grep[1]);
-    const include = includeMatch
-      ? (includeMatch[1] ?? includeMatch[2] ?? includeMatch[3])
-      : undefined;
-    return asCall(grepSpec, { pattern: grep[3], path: unquote(grep[4]), include });
+  // grep/rg: parse by tokens so flags work in any position — models write both
+  // "grep -rn --include='*' 'bem' <dir>" and "grep -n 'bem' -r <dir>".
+  const tokens = splitArgs(cmd);
+  if (tokens[0] === "grep" || tokens[0] === "rg") {
+    const rest = tokens.slice(1);
+    const flags = rest.filter((t) => t.startsWith("-"));
+    const positional = rest.filter((t) => !t.startsWith("-"));
+    if (positional.length >= 1) {
+      const includeFlag = flags.find((f) => f.startsWith("--include="));
+      const include = includeFlag ? includeFlag.slice("--include=".length) : undefined;
+      return asCall(grepSpec, {
+        pattern: positional[0],
+        path: positional[1] ? unquote(positional[1]) : undefined,
+        include,
+      });
+    }
   }
 
   const glob = /^(?:ls|find)\s+(?!-[a-zA-Z])([^\s|&;]+)$/.exec(cmd);

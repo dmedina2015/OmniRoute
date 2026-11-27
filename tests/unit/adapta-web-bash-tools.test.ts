@@ -283,3 +283,25 @@ describe("classifyBashCommand — real grep shapes", () => {
     assert.deepEqual(r?.args, { pattern: "bem", path: "a.txt" });
   });
 });
+
+describe("parser edge cases from the live matrix", () => {
+  it("accepts a grep flag after the pattern", () => {
+    const r = classifyBashCommand("grep -n 'bem' -r /tmp/x", CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "bem", path: "/tmp/x" });
+  });
+
+  it("accepts grep without a path", () => {
+    const r = classifyBashCommand("grep -rn 'bem'", CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "bem" });
+  });
+
+  it("drops the language label the model repeated inside the block", () => {
+    assert.equal(extractCommand("```bash\nbash\nls /tmp/*.txt\n```"), "ls /tmp/*.txt");
+  });
+
+  it("keeps a command that legitimately starts with sh-like text intact", () => {
+    assert.equal(extractCommand("```bash\nshellcheck a.sh\n```"), "shellcheck a.sh");
+  });
+});
