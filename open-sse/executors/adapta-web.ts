@@ -1,60 +1,42 @@
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import {
-  prepareToolMessages,
-  looksLikeToolRefusal,
-  looksLikeToolPromise,
-  buildToolCorrectiveNudge,
-} from "../translator/webTools.ts";
-import { buildToolModeResponse } from "./chatgptWebTools.ts";
+import { buildAdaptaToolContract, buildAdaptaToolReminder } from "./adapta-web/contract.ts";
+import { buildAdaptaToolAwareResult } from "./adapta-web/parse.ts";
+import { resolveIsTemporaryChat } from "./adapta-web/temporaryChat.ts";
+import { isAdaptaPromise, isAdaptaRefusal } from "./adapta-web/refusals.ts";
+import { ADAPTA_MAX_TOOL_RETRIES, buildCorrectiveNudge } from "./adapta-web/retry.ts";
+import { resolveModelKey } from "./adapta-web/modelKeys.ts";
+import { buildAdaptaMessages } from "./adapta-web/messages.ts";
+import type { OpenAIMessage } from "./adapta-web/types.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
+import { buildToolModeResponse } from "./chatgptWebTools.ts";
 
 const ADAPTA_APP_URL = "https://agent.adapta.one";
 const ADAPTA_CLERK_URL = "https://clerk.agent.adapta.one";
 const ADAPTA_STREAM_URL = `${ADAPTA_APP_URL}/api/chat/stream/v1`;
 const ADAPTA_PUBLIC_STREAM_ERROR = `\n\n[Erro: ${sanitizeErrorMessage("Adapta upstream error")}]`;
 
+/**
+ * Opt-in capture of what Adapta actually answers.
+ *
+ * A 401 is currently reduced to "Adapta error HTTP 401", which hides the cause: the
+ * Clerk client call can answer 200 with an empty `sessions` array (dead cookie) or the
+ * chat endpoint can reject a session JWT. Set OMNIROUTE_ADAPTA_DEBUG_UPSTREAM=1 to log
+ * the upstream status and body (truncated and redacted) — never in the client response.
+ */
+function upstreamDebugEnabled(): boolean {
+  return process.env.OMNIROUTE_ADAPTA_DEBUG_UPSTREAM === "1";
+}
+
+/** Strip cookies and JWT-looking tokens from upstream text before logging it. */
+export function redactUpstreamText(text: string): string {
+  return text
+    .replace(/__client=[^;\s"']+/g, "__client=<redacted>")
+    .replace(/eyJ[A-Za-z0-9._-]{20,}/g, "<jwt-redacted>")
+    .replace(/Bearer\s+[A-Za-z0-9._-]{10,}/gi, "Bearer <redacted>");
+}
+
 // Default model key in Adapta's catalog (auto-select).
-const DEFAULT_MODEL_KEY = "ONE";
-
-// #adapta-refusal-retry: Adapta's web models are non-deterministic enough that a single
-// tool-aware call succeeds only ~40-70% of the time depending on the tool — the rest of
-// the time the model replies with a plain-text refusal ("I don't have access to the
-// terminal", "only the platform catalog is active") instead of a <tool> block. Because
-// agentic tasks compose multiplicatively (5 steps at 60%/step ≈ 17% end-to-end), a
-// bounded in-provider retry turns a ~60% per-step success into ~94%. Mirrors the
-// established bounded-retry pattern in deepseek-web.ts (MAX_TOOL_PARSE_ATTEMPTS).
-const ADAPTA_MAX_REFUSAL_RETRIES = 3;
-
-// Map from OmniRoute model IDs to Adapta catalog model keys.
-export const MODEL_KEY_MAP: Record<string, string> = {
-  "adapta-one": "ONE",
-  "adapta-gpt-6-luna": "GPT_6_LUNA",
-  "adapta-claude-5-5-haiku": "CLAUDE_5_5_HAIKU",
-  "adapta-claude-5-5-sonnet": "CLAUDE_5_5_SONNET",
-  "adapta-claude-5-sonnet": "CLAUDE_5_SONNET",
-  "adapta-gemini-3-8-flash": "GEMINI_3_8_FLASH",
-  "adapta-gemini-3-7-flash": "GEMINI_3_7_FLASH",
-  "adapta-gemini-3-1-pro-preview": "GEMINI_3_1_PRO_PREVIEW",
-  "adapta-deepseek-v4-1-flash-1017": "DEEPSEEK_V4_1_FLASH_1017",
-  "adapta-deepseek-v4-flash-updated": "DEEPSEEK_V4_FLASH_UPDATED",
-  "adapta-deepseek-v4-pro-0813": "DEEPSEEK_V4_PRO_0813",
-  "adapta-kimi-k2-7-code": "KIMI_K2_7_CODE",
-  "adapta-kimi-k2-6": "KIMI_K2_6",
-  "adapta-minimax-m3": "MINIMAX_M3",
-  "adapta-minimax-m3-1-flash": "MINIMAX_M3_1_FLASH",
-  "adapta-minimax-m2-7-highspeed": "MINIMAX_M2_7_HIGHSPEED",
-  "adapta-minimax-m2-7": "MINIMAX_M2_7",
-  "adapta-qwen-3-8-27b": "QWEN_3_8_27B",
-  "adapta-qwen-3-8-flash": "QWEN_3_8_FLASH",
-  "adapta-qwen-3-7-plus": "QWEN_3_7_PLUS",
-  "adapta-glm-5-3-flash": "GLM_5_3_FLASH",
-  "adapta-glm-5-2": "GLM_5_2",
-  "adapta-grok-43": "GROK_43",
-  "adapta-grok-45": "GROK_45",
-  "adapta-muse-spark-1-3": "MUSE_SPARK_1_3",
-  "adapta-sonar-pro": "SONAR_PRO",
-  "adapta-nvidia-nemotron-super": "NVIDIA_NEMOTRON_SUPER",
-};
+export { MODEL_KEY_MAP } from "./adapta-web/modelKeys.ts";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -149,7 +131,13 @@ async function getSessionId(
   });
 
   if (!resp.ok) {
+    await logUpstreamFailure(log, "clerk:/v1/client", resp);
     throw new Error(`Clerk /v1/client returned HTTP ${resp.status} — check your __client cookie`);
+  }
+
+  if (upstreamDebugEnabled()) {
+    const preview = redactUpstreamText(await resp.clone().text()).slice(0, 400);
+    log?.warn?.("ADAPTA-DEBUG", `clerk:/v1/client → ${preview}`);
   }
 
   const body = await resp.json();
@@ -184,6 +172,7 @@ async function refreshSessionJwt(
   });
 
   if (!resp.ok) {
+    await logUpstreamFailure(log, "clerk:/tokens", resp);
     throw new Error(`Clerk token refresh returned HTTP ${resp.status}`);
   }
 
@@ -217,204 +206,7 @@ async function getSessionJwt(
 
 // ── Request/response translation ──────────────────────────────────────────────
 
-interface OpenAIToolCallMsg {
-  id?: string;
-  type?: string;
-  function?: { name?: string; arguments?: string };
-}
-
-interface OpenAIMessage {
-  role: string;
-  content: unknown;
-  tool_calls?: OpenAIToolCallMsg[];
-  tool_call_id?: string;
-  name?: string;
-}
-
-interface AdaptaPart {
-  type: "text" | "step-start";
-  text?: string;
-  state?: string;
-}
-
-interface AdaptaMessage {
-  id: string;
-  role: string;
-  parts: AdaptaPart[];
-  metadata?: Record<string, unknown>;
-  state?: string;
-}
-
-/**
- * Whether this request's Adapta chat should be created as temporary (not kept in the
- * user's agent.adapta.one web history). Defaults to `true`: an agentic client (OpenCode,
- * curl scripts, etc.) sends one Adapta chat per turn, and that conversation is already
- * persisted on the client's own side — there's no reason for it to also permanently
- * pollute the user's Adapta web UI. Opt back into persistent chats per request with
- * `provider_options.adapta.isTemporaryChat` (or the `adapta-web` id, matching the
- * `provider_options.<provider>` bag convention used by the search handlers).
- */
-export function resolveIsTemporaryChat(bodyObj: Record<string, unknown>): boolean {
-  const providerOptions = bodyObj.provider_options;
-  if (!providerOptions || typeof providerOptions !== "object" || Array.isArray(providerOptions)) {
-    return true;
-  }
-  const bag =
-    (providerOptions as Record<string, unknown>).adapta ??
-    (providerOptions as Record<string, unknown>)["adapta-web"];
-  if (!bag || typeof bag !== "object" || Array.isArray(bag)) return true;
-  const override = (bag as Record<string, unknown>).isTemporaryChat;
-  return typeof override === "boolean" ? override : true;
-}
-
-/** Extract plain text from an OpenAI message content (string or content-parts array). */
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((c: Record<string, unknown>) => c.type === "text")
-      .map((c: Record<string, unknown>) => String(c.text ?? ""))
-      .join("");
-  }
-  return String(content ?? "");
-}
-
-/**
- * Render an assistant's tool_calls as `<tool>{...}</tool>` blocks — the same envelope
- * `translator/webTools.ts` teaches the model to emit — and fold them into its text so
- * a later history re-send still shows the model its own prior call.
- */
-function renderAssistantToolCalls(toolCalls: OpenAIToolCallMsg[]): string[] {
-  const lines: string[] = [];
-  for (const tc of toolCalls) {
-    const fnName = tc?.function?.name;
-    if (!fnName) continue;
-    const args = tc.function?.arguments ?? "{}";
-    lines.push(`<tool>{"name":${JSON.stringify(fnName)},"arguments":${args}}</tool>`);
-  }
-  return lines;
-}
-
-/** Build the final Adapta messages array, injecting system prompt into first user message. */
-export function buildAdaptaMessages(
-  messages: OpenAIMessage[],
-  modelKey: string,
-  chatId: string
-): AdaptaMessage[] {
-  // Split system/developer content into "leading" (appears before the first real
-  // turn — the client's own system prompt) and "trailing" (appears after the last
-  // real turn — e.g. the <tool> contract `prepareToolMessages()` deliberately
-  // appends LAST, see its docstring: prepending it loses to big system prompts).
-  // Merging both into one blob glued onto turn 1 — the previous behavior — buried
-  // the trailing tool contract inside a huge leading block for clients like
-  // OpenCode whose system prompt runs tens of KB, so the model never reliably
-  // saw it (#tool-contract-buried).
-  let lastNonSystemIdx = -1;
-  messages.forEach((msg, idx) => {
-    const role = msg.role === "developer" ? "system" : msg.role;
-    if (role !== "system") lastNonSystemIdx = idx;
-  });
-
-  let leadingSystemText = "";
-  let trailingSystemText = "";
-  const rest: OpenAIMessage[] = [];
-
-  messages.forEach((msg, idx) => {
-    const role = msg.role === "developer" ? "system" : msg.role;
-    if (role === "system") {
-      if (idx > lastNonSystemIdx) {
-        trailingSystemText += (trailingSystemText ? "\n" : "") + extractText(msg.content);
-      } else {
-        leadingSystemText += (leadingSystemText ? "\n" : "") + extractText(msg.content);
-      }
-    } else {
-      rest.push(msg);
-    }
-  });
-
-  // tool_call_id -> function name, so a later tool-result turn can be labeled
-  // with which function produced it (Adapta has no native "tool" role/field).
-  const callIdToName = new Map<string, string>();
-  for (const msg of rest) {
-    if (msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
-    for (const tc of msg.tool_calls) {
-      if (tc?.id && typeof tc.function?.name === "string") {
-        callIdToName.set(String(tc.id), tc.function.name);
-      }
-    }
-  }
-
-  const adapted: AdaptaMessage[] = [];
-  let systemInjected = false;
-
-  for (const msg of rest) {
-    // Adapta's wire format only knows "user"/"assistant" roles. Previously a
-    // role:"tool" message hit `continue` here and was silently dropped — the
-    // model never saw its own tool result, so a follow-up turn re-derived the
-    // same "no history" prompt and re-emitted the identical tool call forever.
-    // Fold it into a user turn instead, labeled with the function that produced it.
-    if (msg.role === "tool") {
-      const text = extractText(msg.content).trim();
-      if (!text) continue;
-      const name = msg.name || callIdToName.get(String(msg.tool_call_id ?? "")) || "tool";
-      const id = crypto.randomUUID();
-      adapted.push({
-        id,
-        role: "user",
-        parts: [{ type: "text", text: `[Tool result: ${name}]\n${text}` }],
-      });
-      continue;
-    }
-
-    if (msg.role !== "user" && msg.role !== "assistant") continue;
-    let text = extractText(msg.content);
-
-    // An assistant turn that only called a tool has `content: null` — extractText()
-    // alone would collapse it to "", the second half of the same drop (#tool-exchange-dropped).
-    if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
-      const callLines = renderAssistantToolCalls(msg.tool_calls);
-      text = [text.trim(), ...callLines].filter(Boolean).join("\n\n");
-    }
-
-    if (!text.trim() && msg.role !== "assistant") continue;
-
-    const id = crypto.randomUUID();
-
-    if (msg.role === "assistant") {
-      adapted.push({
-        id,
-        role: "assistant",
-        parts: [{ type: "text", text }],
-        metadata: { model: modelKey, chatId, messageId: id, isPaused: false },
-        state: "done",
-      });
-      continue;
-    }
-
-    if (!systemInjected && leadingSystemText && msg.role === "user") {
-      adapted.push({
-        id,
-        role: "user",
-        parts: [{ type: "text", text: `${leadingSystemText}\n\n${text}` }],
-      });
-      systemInjected = true;
-    } else {
-      adapted.push({ id, role: "user", parts: [{ type: "text", text }] });
-    }
-  }
-
-  if (trailingSystemText) {
-    // Always its own turn — the last thing the model reads before generating,
-    // never merged into the leading system block or into the last real user query.
-    adapted.push({
-      id: crypto.randomUUID(),
-      role: "user",
-      parts: [{ type: "text", text: trailingSystemText }],
-    });
-  }
-
-  return adapted;
-}
+export { buildAdaptaMessages } from "./adapta-web/messages.ts";
 
 // ── SSE transform: Adapta → OpenAI ───────────────────────────────────────────
 
@@ -513,6 +305,101 @@ function transformStream(adaptaStream: ReadableStream, model: string): ReadableS
 
 // ── Executor ──────────────────────────────────────────────────────────────────
 
+/** Last tool result in the history that reports a failure, if any. */
+function lastToolError(messages: OpenAIMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "tool") continue;
+    const text =
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    return /error|traceback|exit code [1-9]|not exist|invalid|denied/i.test(text)
+      ? text.slice(0, 400)
+      : null;
+  }
+  return null;
+}
+
+/**
+ * Attach Adapta's tool protocol to the request.
+ *
+ * The contract goes in as a trailing system message: `buildAdaptaMessages()` keeps
+ * trailing system content as the LAST turn, which is where the model actually reads it
+ * (glued to the first turn it loses against a large client prompt). The reminder goes
+ * on the current user turn because web-UI models weigh that turn far more heavily.
+ */
+function applyAdaptaToolContract(
+  messages: OpenAIMessage[],
+  requestedTools: unknown
+): OpenAIMessage[] {
+  const contract = buildAdaptaToolContract(requestedTools);
+  if (!contract) return messages;
+
+  const effective = [...messages];
+  const reminder = buildAdaptaToolReminder(contract);
+  for (let i = effective.length - 1; i >= 0; i--) {
+    const msg = effective[i];
+    if (msg?.role !== "user") continue;
+    if (typeof msg.content === "string") {
+      effective[i] = { ...msg, content: msg.content + reminder };
+    } else if (Array.isArray(msg.content)) {
+      effective[i] = {
+        ...msg,
+        content: [...(msg.content as unknown[]), { type: "text", text: reminder }],
+      };
+    }
+    break;
+  }
+  effective.push({ role: "system", content: contract });
+  return effective;
+}
+
+/** Drain an Adapta SSE body down to its concatenated text. */
+async function readCollectedText(body: ReadableStream): Promise<string> {
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let buf = "";
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === "text-delta" && ev.id !== "quick-response") {
+            text += String(ev.delta ?? "");
+          }
+        } catch {
+          // skip malformed event
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return text;
+}
+
+/** Log the upstream status/body when the opt-in debug flag is on (never to the client). */
+async function logUpstreamFailure(
+  log: ExecuteInput["log"] | undefined,
+  label: string,
+  response: Response
+): Promise<void> {
+  if (!upstreamDebugEnabled()) return;
+  try {
+    const body = redactUpstreamText(await response.clone().text()).slice(0, 800);
+    const type = response.headers.get("content-type") ?? "?";
+    log?.warn?.("ADAPTA-DEBUG", `${label} → HTTP ${response.status} (${type}) ${body}`);
+  } catch {
+    log?.warn?.("ADAPTA-DEBUG", `${label} → HTTP ${response.status} (body unreadable)`);
+  }
+}
+
 export class AdaptaWebExecutor extends BaseExecutor {
   constructor() {
     super("adapta-web", { baseUrl: ADAPTA_STREAM_URL });
@@ -536,7 +423,11 @@ export class AdaptaWebExecutor extends BaseExecutor {
   async execute({ model, body, stream, credentials, signal, log }: ExecuteInput) {
     const bodyObj = (body ?? {}) as Record<string, unknown>;
     const messages = (Array.isArray(bodyObj.messages) ? bodyObj.messages : []) as OpenAIMessage[];
-    const { hasTools, requestedTools, effectiveMessages } = prepareToolMessages(bodyObj, messages);
+    const requestedTools = bodyObj.tools;
+    const hasTools = Array.isArray(requestedTools) && requestedTools.length > 0;
+    const effectiveMessages = hasTools
+      ? applyAdaptaToolContract(messages, requestedTools)
+      : messages;
 
     // 1. Extract and validate credentials
     const rawKey = String((credentials as Record<string, unknown>)?.apiKey ?? "");
@@ -569,9 +460,11 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     // 2. Build Adapta request body
-    const modelKey = MODEL_KEY_MAP[model] ?? DEFAULT_MODEL_KEY;
+    const modelKey = resolveModelKey(model);
     const chatId = crypto.randomUUID();
-    const adaptaMessages = buildAdaptaMessages(effectiveMessages, modelKey, chatId);
+    const adaptaMessages = buildAdaptaMessages(effectiveMessages, modelKey, chatId, {
+      toolCallFormat: hasTools ? "bash" : "tool-json",
+    });
 
     if (adaptaMessages.length === 0) {
       return {
@@ -607,17 +500,8 @@ export class AdaptaWebExecutor extends BaseExecutor {
       `POST ${ADAPTA_STREAM_URL} | model=${model} modelAi=${modelKey} msgs=${adaptaMessages.length}`
     );
 
-    // 3. Fire request
-    //
-    // #adapta-refusal-retry: a tool-aware call to Adapta succeeds only ~40-70% of the
-    // time — the failure mode is a plain-text refusal instead of a <tool> block, which
-    // used to be returned to the client as if it were a final answer, stalling the
-    // agentic loop. When tools are in play, a refused reply is therefore retried
-    // upstream (bounded), because the upstream is non-deterministic and asking again
-    // usually just works.
-    // A corrective retry must carry the correction: re-sending the identical payload
-    // reproduces the same refusal or plan (#adapta-tool-promise), so the nudge is
-    // appended as one extra user turn built in Adapta's own message shape.
+    // 3. Fire request. A corrective retry carries the correction: re-sending the
+    // identical payload reproduces the identical refusal or promise.
     const fireRequest = async (nudge?: string): Promise<Response> => {
       const payload = nudge
         ? {
@@ -640,49 +524,29 @@ export class AdaptaWebExecutor extends BaseExecutor {
       });
     };
 
-    /** Drain an upstream SSE response down to its concatenated text. */
-    const collectText = async (
-      body: ReadableStream
-    ): Promise<{ text: string; error: string | null }> => {
-      const decoder = new TextDecoder();
-      const reader = body.getReader();
-      let buf = "";
-      let fullText = "";
-      let upstreamErrorMessage: string | null = null;
+    let resp = await fireRequest();
 
+    // A 401/403 here is usually a STALE CACHED session JWT, not a dead cookie: the next
+    // request re-authenticates through Clerk and works, which is why the failure looked
+    // intermittent and healed itself. Renew once and repeat before bothering the client.
+    if (resp.status === 401 || resp.status === 403) {
+      log?.warn?.(
+        "ADAPTA-WEB",
+        `Session JWT rejected (HTTP ${resp.status}) — refreshing and retrying once`
+      );
+      sessionCache.delete(cacheKey(clientJwt));
       try {
-        readLoop: while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            try {
-              const ev = JSON.parse(line.slice(6));
-              if (ev.type === "text-delta" && ev.id !== "quick-response") {
-                fullText += String(ev.delta ?? "");
-              } else if (ev.type === "error") {
-                upstreamErrorMessage = "Adapta upstream error";
-                break readLoop;
-              }
-            } catch {
-              // skip
-            }
-          }
-        }
-      } finally {
-        if (upstreamErrorMessage) {
-          void reader.cancel("Adapta upstream SSE error").catch(() => undefined);
-        }
-        reader.releaseLock();
+        const freshJwt = await getSessionJwt(clientJwt, signal, log);
+        headers.Authorization = `Bearer ${freshJwt}`;
+        await logUpstreamFailure(log, "adapta:/api/chat/stream/v1 (rejected JWT)", resp);
+        resp = await fireRequest();
+      } catch (retryError) {
+        log?.warn?.(
+          "ADAPTA-WEB",
+          `Session refresh failed: ${sanitizeErrorMessage(retryError instanceof Error ? retryError.message : String(retryError))}`
+        );
       }
-
-      return { text: fullText, error: upstreamErrorMessage };
-    };
-
-    const resp = await fireRequest();
+    }
 
     if (!resp.ok) {
       let errMsg = `Adapta error HTTP ${resp.status}`;
@@ -693,7 +557,13 @@ export class AdaptaWebExecutor extends BaseExecutor {
         sessionCache.delete(cacheKey(clientJwt));
       } else if (resp.status === 429) {
         errMsg = "Adapta rate limited — wait and retry";
+      } else if (resp.status === 401 || resp.status === 403) {
+        errMsg =
+          "Adapta rejected the session (HTTP " +
+          resp.status +
+          ") — re-paste your __client cookie from .clerk.agent.adapta.one";
       }
+      await logUpstreamFailure(log, "adapta:/api/chat/stream/v1", resp);
       log?.warn?.("ADAPTA-WEB", errMsg);
       return {
         response: makeErrorResponse(resp.status, errMsg),
@@ -704,16 +574,9 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     // 4. Stream or collect.
-    // Real token-by-token streaming is only safe when no tools are requested: Adapta has
-    // no native tool calling, so a tool-aware reply arrives as a literal `<tool>{...}</tool>`
-    // envelope in the text. Streaming that straight through (the previous behavior) leaked
-    // the raw envelope to the client as visible assistant prose with finish_reason "stop" —
-    // it never became `tool_calls`, so agentic clients (OpenCode defaults to streaming
-    // requests) saw a fake "I called the tool" narration that never actually ran anything
-    // (#tool-leak-raw-text). Buffer the full reply first whenever tools are in play, parse
-    // it with buildToolAwareResult()/buildToolModeResponse(), THEN replay it as a single
-    // terminal SSE chunk if the client asked for streaming — mirroring the established
-    // chatgptWebTools.ts pattern already used by gemini-web.ts, maxai.ts, uc.ts, etc.
+    // Streaming is only safe when the request carries no tools: with tools the reply
+    // may be a tool envelope that must be parsed before it reaches the client (see the
+    // hasTools branch below).
     if (!hasTools && stream !== false) {
       return {
         response: new Response(transformStream(resp.body!, model), {
@@ -730,13 +593,45 @@ export class AdaptaWebExecutor extends BaseExecutor {
       };
     }
 
-    // Collect all text-delta events (used for: non-streaming requests, and any
-    // tool-aware request regardless of its requested stream mode).
-    let collected = await collectText(resp.body!);
+    // Non-streaming: collect all text-delta events
+    const decoder = new TextDecoder();
+    const reader = resp.body!.getReader();
+    let buf = "";
+    let fullText = "";
+    let upstreamErrorMessage: string | null = null;
 
-    if (collected.error) {
+    try {
+      readLoop: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === "text-delta" && ev.id !== "quick-response") {
+              fullText += String(ev.delta ?? "");
+            } else if (ev.type === "error") {
+              upstreamErrorMessage = "Adapta upstream error";
+              break readLoop;
+            }
+          } catch {
+            // skip
+          }
+        }
+      }
+    } finally {
+      if (upstreamErrorMessage) {
+        void reader.cancel("Adapta upstream SSE error").catch(() => undefined);
+      }
+      reader.releaseLock();
+    }
+
+    if (upstreamErrorMessage) {
       return {
-        response: new Response(JSON.stringify(buildErrorBody(502, collected.error)), {
+        response: new Response(JSON.stringify(buildErrorBody(502, upstreamErrorMessage)), {
           status: 502,
           headers: { "Content-Type": "application/json" },
         }),
@@ -747,36 +642,50 @@ export class AdaptaWebExecutor extends BaseExecutor {
     }
 
     if (hasTools) {
-      // Retry loop for a refused tool-aware reply. A refusal is detected on the RAW text
-      // (before parsing): a reply that refuses produced no <tool> block at all, so there is
-      // nothing for the parser to recover. A legitimate final answer (the model really
-      // answered, no tool needed) is NOT a refusal and must never be retried — retrying it
-      // would burn an upstream call and could replace a correct answer with a worse one.
-      let fullText = collected.text;
+      // Bounded retry: a tool-aware call fails with a plain refusal or a promise far
+      // more often than a native tool-calling API would, and both end the turn with no
+      // action. Retry with a correction until the reply is something to parse.
       let attempts = 0;
-      while (attempts < ADAPTA_MAX_REFUSAL_RETRIES) {
-        const refused = looksLikeToolRefusal(fullText);
-        // #adapta-tool-promise: a short "I'll start by inspecting…" / "Vou começar
-        // analisando…" reply is the same stall as a refusal — the model announced the
-        // action and stopped, so the client sees `finish_reason: "stop"` with no
-        // `tool_calls` and ends the turn having edited nothing.
-        const promisedOnly = !refused && looksLikeToolPromise(fullText);
-        if (!refused && !promisedOnly) break;
+      while (attempts < ADAPTA_MAX_TOOL_RETRIES) {
+        const refused = isAdaptaRefusal(fullText);
+        const promisedOnly = !refused && isAdaptaPromise(fullText);
+        // An empty upstream reply is the same class of failure: the client would get an
+        // assistant message with no content and no tool call, which reads as "nothing
+        // happened" (reported live after a code-review turn).
+        const empty = !refused && !promisedOnly && fullText.trim().length === 0;
+        if (!refused && !promisedOnly && !empty) break;
 
         attempts += 1;
         log?.warn?.(
           "ADAPTA-WEB",
-          promisedOnly
-            ? `Tool-aware reply was a promise with no command (attempt ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES}) — retrying with a corrective nudge`
-            : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES}) — retrying with a corrective nudge`
+          empty
+            ? `Tool-aware reply was empty (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+            : promisedOnly
+              ? `Tool-aware reply was a promise with no command (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+              : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
         );
+
+        // A generation can take longer than a Clerk session JWT lives (>60s), so reusing
+        // the header from the first attempt sent an expired token and Adapta answered a
+        // legitimate 401. Re-mint before every retry.
+        try {
+          const freshJwt = await getSessionJwt(clientJwt, signal, log);
+          headers.Authorization = `Bearer ${freshJwt}`;
+        } catch (refreshError) {
+          log?.warn?.(
+            "ADAPTA-WEB",
+            `Could not refresh the session before retry: ${sanitizeErrorMessage(
+              refreshError instanceof Error ? refreshError.message : String(refreshError)
+            )}`
+          );
+        }
+
         const retryResp = await fireRequest(
-          buildToolCorrectiveNudge(promisedOnly ? "promise" : "refusal")
+          buildCorrectiveNudge(empty ? "empty" : promisedOnly ? "promise" : "refusal", {
+            lastToolError: lastToolError(effectiveMessages),
+          })
         );
         if (!retryResp.ok) {
-          // An HTTP-level failure on retry is surfaced as-is rather than silently
-          // degrading to the refused text the client already rejected.
-          log?.warn?.("ADAPTA-WEB", `Adapta retry failed with HTTP ${retryResp.status}`);
           return {
             response: makeErrorResponse(retryResp.status, `Adapta error HTTP ${retryResp.status}`),
             url: ADAPTA_STREAM_URL,
@@ -784,33 +693,47 @@ export class AdaptaWebExecutor extends BaseExecutor {
             transformedBody: requestPayload,
           };
         }
-        const retryCollected = await collectText(retryResp.body!);
-        if (retryCollected.error) {
-          return {
-            response: new Response(JSON.stringify(buildErrorBody(502, retryCollected.error)), {
-              status: 502,
-              headers: { "Content-Type": "application/json" },
-            }),
-            url: ADAPTA_STREAM_URL,
-            headers,
-            transformedBody: requestPayload,
-          };
-        }
-        // #adapta-empty-retry: an empty retry must not erase a usable reply. Adapta
-        // intermittently answers the repeated turn with no text at all; assigning it
-        // unconditionally turned "the model planned" into `content: ""`, which clients
-        // report as "completed without text" with nothing to show the user.
-        if (retryCollected.text.trim()) {
-          fullText = retryCollected.text;
-        } else {
+
+        const retryText = await readCollectedText(retryResp.body!);
+        if (!retryText.trim()) {
+          // An empty retry must not erase a usable reply: it used to surface as
+          // content: "" and clients reported "completed without text".
           log?.warn?.(
             "ADAPTA-WEB",
-            `Retry ${attempts}/${ADAPTA_MAX_REFUSAL_RETRIES} returned no text — keeping the previous reply`
+            `Retry ${attempts}/${ADAPTA_MAX_TOOL_RETRIES} returned no text — keeping the previous reply`
           );
           break;
         }
+        fullText = retryText;
       }
 
+      // Every retry came back empty: surface an honest error instead of a 200 with no
+      // content, which clients render as a silent "completed".
+      if (fullText.trim().length === 0) {
+        log?.warn?.("ADAPTA-WEB", "Adapta returned no text after retries — reporting 502");
+        return {
+          response: new Response(
+            JSON.stringify(buildErrorBody(502, "Adapta returned an empty reply")),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          ),
+          url: ADAPTA_STREAM_URL,
+          headers,
+          transformedBody: requestPayload,
+        };
+      }
+
+      const { content, toolCalls, finishReason } = buildAdaptaToolAwareResult(
+        fullText,
+        requestedTools,
+        "adp"
+      );
+
+      // Buffer, parse, then replay. Adapta has no native tool calling: a tool-aware
+      // reply is a literal envelope inside the text. Streaming it straight through
+      // (what the tools-free path does) leaks the envelope to the client as visible
+      // assistant prose with finish_reason "stop" — it never becomes `tool_calls`, so
+      // the client sees a narration that executed nothing. Streaming clients get the
+      // parsed completion replayed as a terminal SSE event instead.
       const bufferedJson = new Response(
         JSON.stringify({
           id: `chatcmpl-adp-${Date.now()}`,
@@ -818,11 +741,21 @@ export class AdaptaWebExecutor extends BaseExecutor {
           created: Math.floor(Date.now() / 1000),
           model,
           choices: [
-            { index: 0, message: { role: "assistant", content: fullText }, finish_reason: "stop" },
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: toolCalls ? null : content,
+                ...(toolCalls ? { tool_calls: toolCalls } : {}),
+              },
+              finish_reason: toolCalls ? finishReason : "stop",
+            },
           ],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
+
       return {
         response: await buildToolModeResponse(bufferedJson, requestedTools, stream !== false, {
           cid: `chatcmpl-adp-${Date.now()}`,
@@ -846,7 +779,7 @@ export class AdaptaWebExecutor extends BaseExecutor {
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: collected.text },
+              message: { role: "assistant", content: fullText },
               finish_reason: "stop",
             },
           ],

@@ -35,6 +35,15 @@ export const adapta_webProvider: RegistryEntry = {
       toolCalling: false,
       contextLength: 128000,
       maxOutputTokens: 32768,
+      // Pre-catalog ids stay routable: they all resolved to Adapta's ONE.
+      aliases: [
+        "adapta-gpt",
+        "adapta-claude",
+        "adapta-gemini",
+        "adapta-grok",
+        "adapta-deepseek",
+        "adapta-llama",
+      ],
     },
     {
       id: "adapta-gpt-6-luna",
