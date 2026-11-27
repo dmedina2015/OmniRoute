@@ -318,7 +318,8 @@ describe("shapes seen in the live debugging session", () => {
   it("accepts a quoted pattern containing parentheses", () => {
     const r = classifyBashCommand('grep -n "round(float" src/services/utils.py', CLIENT_TOOLS);
     assert.equal(r?.name, "grep");
-    assert.deepEqual(r?.args, { pattern: "round(float", path: "src/services/utils.py" });
+    // The unbalanced "(" is escaped so the tool's regex engine accepts the pattern.
+    assert.deepEqual(r?.args, { pattern: "round\\(float", path: "src/services/utils.py" });
   });
 
   it("accepts a quoted pattern containing a pipe", () => {
@@ -366,5 +367,40 @@ describe("fence glued to prose", () => {
   it("cuts at the fence that carries narration", () => {
     const reply = "```bash\nsed -n '181,250p' tui.py ```Vou substituir o campo\n```";
     assert.equal(extractCommand(reply), "sed -n '181,250p' tui.py");
+  });
+});
+
+describe("grep patterns are translated to the tool's regex dialect", () => {
+  it("turns BRE alternation into |", () => {
+    const r = classifyBashCommand('grep -n "a\\|b" f.py', CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.equal(r?.args.pattern, "a|b");
+  });
+
+  it("escapes an unbalanced group so rg accepts the pattern", () => {
+    const r = classifyBashCommand('grep -n "_selecionar(stdsc" f.py', CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.equal(r?.args.pattern, "_selecionar\\(stdsc");
+    assert.doesNotThrow(() => new RegExp(String(r?.args.pattern)));
+  });
+
+  it("keeps escaped quotes inside a double-quoted pattern", () => {
+    const r = classifyBashCommand('grep -n "open(path, \\"a\\")" f.py', CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.match(String(r?.args.pattern), /open/);
+    assert.doesNotThrow(() => new RegExp(String(r?.args.pattern)));
+  });
+
+  // A bare word is another pattern, not a path; sending it as `path` produced
+  // "Search path does not exist".
+  it("omits a second positional that is not a path", () => {
+    const r = classifyBashCommand("grep -n CATEGORIAS categorias_disponiveis", CLIENT_TOOLS);
+    assert.equal(r?.name, "grep");
+    assert.deepEqual(r?.args, { pattern: "CATEGORIAS" });
+  });
+
+  it("forwards a real path", () => {
+    const r = classifyBashCommand("grep -n x src/", CLIENT_TOOLS);
+    assert.deepEqual(r?.args, { pattern: "x", path: "src/" });
   });
 });

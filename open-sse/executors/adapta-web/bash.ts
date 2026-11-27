@@ -121,6 +121,45 @@ const NEW_ARGS = ["newString", "new_string", "newText", "replace"] as const;
 
 const OPTIONAL_FIELDS = new Set(["include"]);
 
+/** BRE constructs a shell user writes, mapped to the Rust-regex dialect of the tool. */
+function translateShellPattern(pattern: string): string | null {
+  const translated = pattern
+    .replace(/\\\|/g, "|")
+    .replace(/\\\(/g, "(")
+    .replace(/\\\)/g, ")")
+    .replace(/\\\+/g, "+")
+    .replace(/\\\?/g, "?")
+    .replace(/\\</g, "\\b")
+    .replace(/\\>/g, "\\b");
+  try {
+    new RegExp(translated);
+    return translated;
+  } catch {
+    // Still invalid (unbalanced group, stray metacharacter): keep alternation but make
+    // every branch literal, which is what a shell user meant in practice.
+    const branches = translated.split("|").map((b) => b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const joined = branches.join("|");
+    try {
+      new RegExp(joined);
+      return joined;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** True when a positional argument plausibly denotes a path rather than another word. */
+function looksLikePath(value: string): boolean {
+  return (
+    value === "." ||
+    value === ".." ||
+    value.includes("/") ||
+    value.includes("*") ||
+    value.startsWith("~") ||
+    /\.[A-Za-z0-9]{1,8}$/.test(value)
+  );
+}
+
 /** Make relative path-like arguments absolute against a working directory. */
 function absolutizePaths(args: Record<string, unknown>, dir: string): Record<string, unknown> {
   const base = dir.replace(/\/+$/, "");
@@ -171,8 +210,15 @@ function splitArgs(input: string): string[] {
   const out: string[] = [];
   let current = "";
   let quote: string | null = null;
-  for (const ch of input) {
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
     if (quote) {
+      // Inside double quotes a backslash escapes the next character, so `\"` does not
+      // end the string (shell patterns such as open(path, \"a\") depend on it).
+      if (ch === "\\" && quote === '"' && i + 1 < input.length) {
+        current += input[++i];
+        continue;
+      }
       if (ch === quote) quote = null;
       else current += ch;
       continue;
@@ -315,11 +361,15 @@ export function classifyBashCommand(
     if (positional.length >= 1) {
       const includeFlag = flags.find((f) => f.startsWith("--include="));
       const include = includeFlag ? includeFlag.slice("--include=".length) : undefined;
-      return asCall(grepSpec, {
-        pattern: positional[0],
-        path: positional[1] ? unquote(positional[1]) : undefined,
-        include,
-      });
+      const pattern = translateShellPattern(positional[0]);
+      // An untranslatable pattern is better run by the shell than sent to a regex engine
+      // that would reject it.
+      if (!pattern) return null;
+      const candidate = positional[1] ? unquote(positional[1]) : undefined;
+      // Only a real path is forwarded: a bare word ("categorias_disponiveis") is another
+      // pattern, and sending it as `path` produced "Search path does not exist".
+      const path = candidate && looksLikePath(candidate) ? candidate : undefined;
+      return asCall(grepSpec, { pattern, path, include });
     }
   }
 
