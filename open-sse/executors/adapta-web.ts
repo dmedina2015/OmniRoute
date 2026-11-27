@@ -524,7 +524,29 @@ export class AdaptaWebExecutor extends BaseExecutor {
       });
     };
 
-    const resp = await fireRequest();
+    let resp = await fireRequest();
+
+    // A 401/403 here is usually a STALE CACHED session JWT, not a dead cookie: the next
+    // request re-authenticates through Clerk and works, which is why the failure looked
+    // intermittent and healed itself. Renew once and repeat before bothering the client.
+    if (resp.status === 401 || resp.status === 403) {
+      log?.warn?.(
+        "ADAPTA-WEB",
+        `Session JWT rejected (HTTP ${resp.status}) — refreshing and retrying once`
+      );
+      sessionCache.delete(cacheKey(clientJwt));
+      try {
+        const freshJwt = await getSessionJwt(clientJwt, signal, log);
+        headers.Authorization = `Bearer ${freshJwt}`;
+        await logUpstreamFailure(log, "adapta:/api/chat/stream/v1 (rejected JWT)", resp);
+        resp = await fireRequest();
+      } catch (retryError) {
+        log?.warn?.(
+          "ADAPTA-WEB",
+          `Session refresh failed: ${sanitizeErrorMessage(retryError instanceof Error ? retryError.message : String(retryError))}`
+        );
+      }
+    }
 
     if (!resp.ok) {
       let errMsg = `Adapta error HTTP ${resp.status}`;
