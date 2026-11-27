@@ -278,6 +278,20 @@ function transformStream(adaptaStream: ReadableStream, model: string): ReadableS
 
 // ── Executor ──────────────────────────────────────────────────────────────────
 
+/** Last tool result in the history that reports a failure, if any. */
+function lastToolError(messages: OpenAIMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "tool") continue;
+    const text =
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    return /error|traceback|exit code [1-9]|not exist|invalid|denied/i.test(text)
+      ? text.slice(0, 400)
+      : null;
+  }
+  return null;
+}
+
 /**
  * Attach Adapta's tool protocol to the request.
  *
@@ -581,7 +595,9 @@ export class AdaptaWebExecutor extends BaseExecutor {
         );
 
         const retryResp = await fireRequest(
-          buildCorrectiveNudge(empty ? "empty" : promisedOnly ? "promise" : "refusal")
+          buildCorrectiveNudge(empty ? "empty" : promisedOnly ? "promise" : "refusal", {
+            lastToolError: lastToolError(effectiveMessages),
+          })
         );
         if (!retryResp.ok) {
           return {

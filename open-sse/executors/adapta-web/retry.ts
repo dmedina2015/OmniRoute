@@ -14,7 +14,15 @@ export const ADAPTA_MAX_TOOL_RETRIES = 3;
 
 export type CorrectiveKind = "refusal" | "promise" | "empty";
 
-export function buildCorrectiveNudge(kind: CorrectiveKind): string {
+export interface CorrectiveContext {
+  /** Last tool result that reported a failure, from the request history. */
+  lastToolError?: string | null;
+}
+
+export function buildCorrectiveNudge(
+  kind: CorrectiveKind,
+  context: CorrectiveContext = {}
+): string {
   if (kind === "empty") {
     return (
       "Your previous reply was completely empty. Continue the task now: either emit one " +
@@ -29,10 +37,19 @@ export function buildCorrectiveNudge(kind: CorrectiveKind): string {
       "Reply NOW with exactly one fenced ```bash block containing the first real command."
     );
   }
+  // When the history carries a failing tool result, the model tends to read its own
+  // failed command as "the tool was rejected / the shell is gone". Quote the real error:
+  // the tool ran, the command failed, and it can be fixed.
+  const errorHint = context.lastToolError
+    ? ' Your last tool call DID run and failed with: "' +
+      context.lastToolError.replace(/\s+/g, " ").slice(0, 240) +
+      '". The tool is working — fix the command or the file content and try again.'
+    : "";
   return (
     "STOP. You have ALREADY used these client tools successfully in this very session, and " +
-    "they are available right now. Do not claim they are unavailable, do not describe a " +
-    "patch, and do not ask the user to apply it. Reply NOW with exactly one fenced ```bash " +
-    "block containing the first real command."
+    "they are available right now." +
+    errorHint +
+    " Do not claim they are unavailable, do not describe a patch, and do not ask the user " +
+    "to apply it. Reply NOW with exactly one fenced ```bash block containing the corrected command."
   );
 }

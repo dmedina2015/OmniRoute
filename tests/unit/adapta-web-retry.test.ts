@@ -177,3 +177,68 @@ describe("denials with adverbs or an 'environment left' claim", () => {
     assert.equal(isAdaptaRefusal("I can no longer run commands in this session."), true);
   });
 });
+
+// Live: the model read its OWN failing command as "the shell was rejected" and refused.
+// The corrective nudge now quotes the real error so the retry has evidence to the
+// contrary.
+describe("refusal after a failing tool call", () => {
+  it("includes the real tool error in the retry payload", async () => {
+    const originalFetch = globalThis.fetch;
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/client")) {
+        return Response.json({ response: { sessions: [{ id: "sess-1", status: "active" }] } });
+      }
+      if (url.includes("/tokens")) return Response.json({ jwt: "eyJ.tool-error-retry.jwt" });
+      bodies.push(JSON.parse(String(init?.body ?? "{}")));
+      const reply =
+        bodies.length === 1
+          ? "Não consigo mais rodar comandos: a chamada anterior foi rejeitada."
+          : "```bash\npython3 -c 'print(1)'\n```";
+      return new Response(
+        `data: ${JSON.stringify({ type: "text-delta", id: "1", delta: reply })}\n\n` +
+          `data: ${JSON.stringify({ type: "done" })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const result = await new mod.AdaptaWebExecutor().execute({
+        model: "adapta-qwen-3-8-flash",
+        stream: false,
+        body: {
+          messages: [
+            { role: "user", content: "corrija o arquivo" },
+            {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "c1",
+                  function: { name: "shell", arguments: '{"command":"python3 tui.py"}' },
+                },
+              ],
+            },
+            {
+              role: "tool",
+              tool_call_id: "c1",
+              content: "SyntaxError: unterminated string literal",
+            },
+          ],
+          tools: TOOLS,
+        },
+        credentials: { apiKey: "__client=unique-tool-error-cookie" },
+        signal: null,
+      });
+
+      assert.equal(bodies.length, 2, "the refusal must be retried");
+      const retryPayload = JSON.stringify(bodies[1]);
+      assert.match(retryPayload, /SyntaxError/, "the nudge must quote the real error");
+      const json = await result.response.json();
+      assert.match(json.choices[0].message.tool_calls[0].function.name, /^(bash|shell)$/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
