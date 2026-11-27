@@ -127,3 +127,30 @@ describe("AdaptaWebExecutor — corrective retry", () => {
     }
   });
 });
+
+// Live: mid-session the model denied having the tools it had just used, and offered a
+// patch instead of applying it.
+describe("refusal dialects seen mid-session", () => {
+  it("detects a denial phrased as unavailability of the file/shell tools", () => {
+    assert.equal(
+      isAdaptaRefusal(
+        "Não consegui aplicar a edição direto no arquivo nesta sessão — as ferramentas de " +
+          "arquivo e terminal não estão disponíveis agora. Mas o tui.py está todo no " +
+          "contexto, então segue o patch completo"
+      ),
+      true
+    );
+  });
+
+  it("detects the English variants", () => {
+    assert.equal(
+      isAdaptaRefusal("I can't write to the file in this session; the tools are not available."),
+      true
+    );
+  });
+
+  it("does not flag a legitimate answer that needs clarification", () => {
+    assert.equal(isAdaptaRefusal("Não consegui entender o requisito, pode explicar?"), false);
+    assert.equal(isAdaptaRefusal("O arquivo tem 412 linhas e 3 exports."), false);
+  });
+});

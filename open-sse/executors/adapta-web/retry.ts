@@ -30,8 +30,9 @@ export function buildCorrectiveNudge(kind: CorrectiveKind): string {
     );
   }
   return (
-    "STOP. The client tools above are available in this conversation and are invoked " +
-    "with a fenced ```bash block. Do not claim they are unavailable and do not describe " +
-    "them. Reply NOW with exactly one fenced ```bash block containing the first real command."
+    "STOP. You have ALREADY used these client tools successfully in this very session, and " +
+    "they are available right now. Do not claim they are unavailable, do not describe a " +
+    "patch, and do not ask the user to apply it. Reply NOW with exactly one fenced ```bash " +
+    "block containing the first real command."
   );
 }

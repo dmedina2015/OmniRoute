@@ -28,6 +28,15 @@ const DENIAL_PATTERNS: RegExp[] = [
   /\b(?:as\s+)?ferramentas\s+(?:reaismente\s+|de\s+)?(?:dispon[ií]ve[l]?s?|ligadas?)\s+(?:aqui|s[aã]o|s[oõ]\s+)?/i,
   /\bn[aã]o\s+consigo\s+(?:ler|listar|abrir)\s+(?:o\s+|a\s+|arquivos|diret[oó]rio)/i,
   /\bferramenta\s+(?:est[aá]\s+)?indispon[ií]vel\b/i,
+  // Live: "as ferramentas de arquivo e terminal não estão disponíveis agora" — the
+  // model denies availability mid-session, right after using them.
+  /\bferramentas?\b[^.\n]{0,60}\bn[aã]o\s+(?:est[aã]o|est[aá])\s+(?:dispon[ií]ve(?:l|is)|indispon[ií]ve(?:l|is)|ausentes)\b/i,
+  /\b(?:as\s+)?ferramentas?\s+(?:de\s+(?:arquivo|arquivos|terminal|escrita|leitura|edi[çc][aã]o)\s+)?(?:n[aã]o\s+)?(?:est[aã]o|est[aá])\s+(?:dispon[ií]ve(?:l|is)|indispon[ií]ve(?:l|is))\b/i,
+  // "não consegui aplicar a edição" / "não consigo escrever no arquivo"
+  /\bn[aã]o\s+(?:consigo|consegui|conseguimos|posso|pude)\s+(?:aplicar|editar|escrever|salvar|alterar|modificar|acessar|abrir|ler|criar|executar|rodar)\b/i,
+  /\bn[aã]o\s+(?:tenho|tem|h[aá])\s+(?:as\s+|nenhuma\s+)?ferramentas?\s+(?:de\s+)?(?:escrita|leitura|arquivo|arquivos|terminal|edi[çc][aã]o|shell)\b/i,
+  /\b(?:tools?|file tools?|write tools?|shell tools?)\s+(?:are\s+)?(?:not\s+available|unavailable)\b/i,
+  /\bi\s+(?:can't|cannot|couldn't|am\s+unable\s+to)\s+(?:apply|edit|write|save|modify|create|access)\b/i,
   /\b(?:n[aã]o\s+)?chegou\s+a\s+rodar\b/i,
 ];
 
