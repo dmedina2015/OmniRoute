@@ -53,9 +53,10 @@ export function buildAdaptaToolAwareResult(
     // the tool's own schema; an envelope with required fields missing reached the
     // client as an invalid call ("read: path missing"). Only keep calls that satisfy
     // the declared schema, otherwise fall back to the text.
-    return structured.toolCalls.every((call) => callSatisfiesSchema(call, tools))
-      ? structured
-      : { ...structured, toolCalls: null, finishReason: "stop" };
+    if (structured.toolCalls.every((call) => callSatisfiesSchema(call, tools))) return structured;
+    // Dropping the call must not leave the client with an empty message: keep the raw
+    // text so the user sees what the model tried to do.
+    return { content: text, toolCalls: null, finishReason: "stop" };
   }
 
   const command = extractCommand(text);

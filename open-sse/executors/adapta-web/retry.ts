@@ -12,9 +12,16 @@
  */
 export const ADAPTA_MAX_TOOL_RETRIES = 3;
 
-export type CorrectiveKind = "refusal" | "promise";
+export type CorrectiveKind = "refusal" | "promise" | "empty";
 
 export function buildCorrectiveNudge(kind: CorrectiveKind): string {
+  if (kind === "empty") {
+    return (
+      "Your previous reply was completely empty. Continue the task now: either emit one " +
+      "fenced ```bash block with the command you still need, or answer the user with the " +
+      "result you already have."
+    );
+  }
   if (kind === "promise") {
     return (
       "STOP. Your previous reply only announced an intention and emitted no command. " +

@@ -37,6 +37,18 @@ const ANY_FENCE_OPEN_RE = /```[^\S\n]*\n/;
  * the fence tag into the command, so the "command" started with the word bash and
  * matched nothing. Only an exact first-line label is removed.
  */
+/**
+ * Cut at a fence that was glued to the next block.
+ *
+ * The greedy capture exists so a heredoc may contain fences; it also swallowed a
+ * second block when the model wrote two of them back to back and the closing fence ran
+ * straight into the next opening one ("... | sort" then six backticks then "bash").
+ * Only that adjacent-fence shape is cut, so a real heredoc survives.
+ */
+function cutAtGluedFence(command: string): string {
+  return command.split(/`{6,}(?:bash|sh|shell|zsh)?\s*\r?\n/)[0].trim();
+}
+
 function stripLanguageLabel(command: string): string {
   return command.replace(/^(?:bash|sh|shell|zsh)[ \t]*\r?\n/, "").trim();
 }
@@ -58,7 +70,7 @@ export function extractCommand(text: string): string | null {
 
   // Tagged, closed. Greedy to the LAST closing fence so a heredoc survives.
   const tagged = /```(?:bash|sh|shell|zsh)\s*\n([\s\S]*)```/.exec(clean);
-  if (tagged && tagged[1].trim()) return stripLanguageLabel(tagged[1]);
+  if (tagged && tagged[1].trim()) return stripLanguageLabel(cutAtGluedFence(tagged[1]));
 
   // Tagged, unclosed.
   if (BASH_OPEN_RE.test(clean) && countFences(clean) % 2 === 1) {

@@ -564,18 +564,24 @@ export class AdaptaWebExecutor extends BaseExecutor {
       while (attempts < ADAPTA_MAX_TOOL_RETRIES) {
         const refused = isAdaptaRefusal(fullText);
         const promisedOnly = !refused && isAdaptaPromise(fullText);
-        if (!refused && !promisedOnly) break;
+        // An empty upstream reply is the same class of failure: the client would get an
+        // assistant message with no content and no tool call, which reads as "nothing
+        // happened" (reported live after a code-review turn).
+        const empty = !refused && !promisedOnly && fullText.trim().length === 0;
+        if (!refused && !promisedOnly && !empty) break;
 
         attempts += 1;
         log?.warn?.(
           "ADAPTA-WEB",
-          promisedOnly
-            ? `Tool-aware reply was a promise with no command (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
-            : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+          empty
+            ? `Tool-aware reply was empty (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+            : promisedOnly
+              ? `Tool-aware reply was a promise with no command (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
+              : `Tool-aware reply refused (attempt ${attempts}/${ADAPTA_MAX_TOOL_RETRIES}) — retrying with a corrective nudge`
         );
 
         const retryResp = await fireRequest(
-          buildCorrectiveNudge(promisedOnly ? "promise" : "refusal")
+          buildCorrectiveNudge(empty ? "empty" : promisedOnly ? "promise" : "refusal")
         );
         if (!retryResp.ok) {
           return {
@@ -597,6 +603,21 @@ export class AdaptaWebExecutor extends BaseExecutor {
           break;
         }
         fullText = retryText;
+      }
+
+      // Every retry came back empty: surface an honest error instead of a 200 with no
+      // content, which clients render as a silent "completed".
+      if (fullText.trim().length === 0) {
+        log?.warn?.("ADAPTA-WEB", "Adapta returned no text after retries — reporting 502");
+        return {
+          response: new Response(
+            JSON.stringify(buildErrorBody(502, "Adapta returned an empty reply")),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          ),
+          url: ADAPTA_STREAM_URL,
+          headers,
+          transformedBody: requestPayload,
+        };
       }
 
       const { content, toolCalls, finishReason } = buildAdaptaToolAwareResult(
