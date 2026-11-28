@@ -396,7 +396,7 @@
     "marked-terminal": "^7.3.0",
     "mermaid": "^11.17.2",
     "monaco-editor": "^0.56.0",
-    "next": "16.4.2",
+    "next": "16.4.6",
     "next-intl": "^4.14.0",
     "next-themes": "^0.4.6",
     "node-machine-id": "^1.1.12",
@@ -410,10 +410,10 @@
     "playwright": "1.62.1",
     "playwright-core": "1.62.1",
     "qrcode": "1.5.4",
-    "react": "19.2.8",
+    "react": "19.3.1",
     "react-day-picker": "10.0.1",
-    "react-dom": "19.2.8",
-    "react-is": "^19.2.6",
+    "react-dom": "19.3.1",
+    "react-is": "19.3.1",
     "react-markdown": "^10.1.0",
     "react-reconciler": "^0.33.0",
     "react18-json-view": "0.2.10",
@@ -466,8 +466,8 @@
     "@types/bun": "1.4.2",
     "@types/node": "^26.5.1",
     "@types/qrcode": "1.5.6",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
+    "@types/react": "19.3.3",
+    "@types/react-dom": "19.3.0",
     "@types/safe-regex": "^1.1.6",
     "@types/ws": "^8.18.0",
     "@vitejs/plugin-react": "^6.1.0",
@@ -479,8 +479,8 @@
     "ctrf": "^0.4.0",
     "dpdm": "^4.3.0",
     "esbuild": "0.28.2",
-    "eslint": "^10.10.0",
-    "eslint-config-next": "16.4.2",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.6",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-sonarjs": "^4.1.0",
     "espree": "^11.2.0",
@@ -629,6 +629,8 @@
     },
     "get-uri": {
       "basic-ftp": "^6.2.3"
-    }
+    },
+    "@types/react": "19.3.3",
+    "@types/react-dom": "19.3.0"
   }
 }
