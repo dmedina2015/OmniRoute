@@ -72,9 +72,9 @@ function normalize(text: string | null | undefined): string | null {
  * not when it reports that a command failed (which is a normal tool result).
  */
 const ENVIRONMENT_NOUN =
-  /\b(?:shell|terminal|bash|ambiente|ferramentas?|execu[çc][aã]o|comandos?)\b/i;
+  /\b(?:shell|terminal|bash|ambiente|ferramentas?|execu[çc][aã]o|comandos?|edi[çc][aã]o|leitura|escrita|edit|read|write|grep|glob)\b/i;
 const UNAVAILABLE_STATE =
-  /\b(?:indispon[ií]ve(?:l|is)|inativ[oa]s?|bloquead[oa]s?|rejeitad[oa]s?|saiu|perdi|parou\s+de|n[aã]o\s+(?:est[aá]|esta|aceita|responde|existe|consigo|posso|tenho|h[aá])|unavailable|not\s+available|no\s+longer|failed\s+to\s+(?:accept|respond))\b/i;
+  /\b(?:indispon[ií]ve(?:l|is)|inativ[oa]s?|bloquead[oa]s?|rejeitad[oa]s?|desabilitad[oa]s?|desativad[oa]s?|desligad[oa]s?|removid[oa]s?|saiu|perdi|parou\s+de|sem\s+(?:acesso|permiss[aã]o)|n[aã]o\s+(?:est[aá]|esta|aceita|responde|existe|consigo|posso|tenho|h[aá])|unavailable|not\s+available|no\s+longer|disabled|removed|turned\s+off|offline|failed\s+to\s+(?:accept|respond))\b/i;
 
 function sentenceMentionsUnavailableEnvironment(text: string): boolean {
   for (const sentence of text.split(/(?<=[.!?\n])\s+/)) {

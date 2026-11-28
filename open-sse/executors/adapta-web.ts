@@ -354,16 +354,27 @@ function applyAdaptaToolContract(
 }
 
 /** Drain an Adapta SSE body down to its concatenated text. */
-async function readCollectedText(body: ReadableStream): Promise<string> {
+/**
+ * Collect the reply text, plus a capped copy of the raw SSE for diagnostics.
+ *
+ * When a retry comes back with no text the only useful evidence is what the upstream
+ * actually sent (a stream of `quick-response` deltas, a lone finish event, an error
+ * frame). Keeping a short raw sample turns the next occurrence into a diagnosis instead
+ * of another guess.
+ */
+async function readCollectedReply(body: ReadableStream): Promise<{ text: string; raw: string }> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let buf = "";
   let text = "";
+  let raw = "";
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true });
+      if (raw.length < 2000) raw += chunk;
+      buf += chunk;
       const lines = buf.split("\n");
       buf = lines.pop() ?? "";
       for (const line of lines) {
@@ -381,7 +392,7 @@ async function readCollectedText(body: ReadableStream): Promise<string> {
   } finally {
     reader.releaseLock();
   }
-  return text;
+  return { text, raw };
 }
 
 /** Log the upstream status/body when the opt-in debug flag is on (never to the client). */
@@ -503,23 +514,33 @@ export class AdaptaWebExecutor extends BaseExecutor {
     // 3. Fire request. A corrective retry carries the correction: re-sending the
     // identical payload reproduces the identical refusal or promise.
     const fireRequest = async (nudge?: string): Promise<Response> => {
-      const payload = nudge
-        ? {
-            ...requestPayload,
-            messages: [
-              ...requestPayload.messages,
-              {
-                id: crypto.randomUUID(),
-                role: "user" as const,
-                parts: [{ type: "text" as const, text: nudge }],
-              },
-            ],
-          }
-        : requestPayload;
+      let messages = requestPayload.messages;
+      if (nudge) {
+        // Fold the nudge into the LAST user turn instead of appending a second one.
+        // The trailing block is already a user turn (Adapta has no system role), so
+        // appending another produced two consecutive user turns — and the live log
+        // showed the model answering that shape with a completely empty stream.
+        const last = messages[messages.length - 1];
+        if (last && last.role === "user") {
+          messages = [
+            ...messages.slice(0, -1),
+            { ...last, parts: [...last.parts, { type: "text" as const, text: nudge }] },
+          ];
+        } else {
+          messages = [
+            ...messages,
+            {
+              id: crypto.randomUUID(),
+              role: "user" as const,
+              parts: [{ type: "text" as const, text: nudge }],
+            },
+          ];
+        }
+      }
       return fetch(ADAPTA_STREAM_URL, {
         method: "POST",
         headers,
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...requestPayload, messages }),
         signal: signal ?? undefined,
       });
     };
@@ -646,7 +667,9 @@ export class AdaptaWebExecutor extends BaseExecutor {
       // more often than a native tool-calling API would, and both end the turn with no
       // action. Retry with a correction until the reply is something to parse.
       let attempts = 0;
-      while (attempts < ADAPTA_MAX_TOOL_RETRIES) {
+      let lastRawStream = "";
+      let exhausted = false;
+      while (true) {
         const refused = isAdaptaRefusal(fullText);
         const promisedOnly = !refused && isAdaptaPromise(fullText);
         // An empty upstream reply is the same class of failure: the client would get an
@@ -654,6 +677,11 @@ export class AdaptaWebExecutor extends BaseExecutor {
         // happened" (reported live after a code-review turn).
         const empty = !refused && !promisedOnly && fullText.trim().length === 0;
         if (!refused && !promisedOnly && !empty) break;
+
+        if (attempts >= ADAPTA_MAX_TOOL_RETRIES) {
+          exhausted = true;
+          break;
+        }
 
         attempts += 1;
         log?.warn?.(
@@ -694,17 +722,51 @@ export class AdaptaWebExecutor extends BaseExecutor {
           };
         }
 
-        const retryText = await readCollectedText(retryResp.body!);
+        const { text: retryText, raw } = await readCollectedReply(retryResp.body!);
         if (!retryText.trim()) {
-          // An empty retry must not erase a usable reply: it used to surface as
-          // content: "" and clients reported "completed without text".
+          // Keeping the previous reply here returned the REFUSAL to the client as if it
+          // were the answer (live: "a ferramenta de shell foi desabilitada no turno"
+          // followed by a patch the model asked the user to apply). A refusal is not a
+          // usable fallback — spend another attempt instead.
+          lastRawStream = raw;
           log?.warn?.(
             "ADAPTA-WEB",
-            `Retry ${attempts}/${ADAPTA_MAX_TOOL_RETRIES} returned no text — keeping the previous reply`
+            `Retry ${attempts}/${ADAPTA_MAX_TOOL_RETRIES} returned no text` +
+              (raw.trim() ? ` — upstream sent: ${raw.replace(/\s+/g, " ").slice(0, 300)}` : "")
           );
-          break;
+          continue;
         }
         fullText = retryText;
+      }
+
+      // Every attempt still refused, promised or came back empty. Returning that text as
+      // a normal answer is worse than an honest error: it tells the agent the tools are
+      // gone and hands the work back to the user, poisoning the rest of the session.
+      if (exhausted || fullText.trim().length === 0) {
+        const reason = fullText.trim().length === 0 ? "empty reply" : "declined to use the tools";
+        log?.warn?.(
+          "ADAPTA-WEB",
+          `Adapta ${reason} after ${attempts}/${ADAPTA_MAX_TOOL_RETRIES} corrective retries — reporting 502` +
+            (lastRawStream.trim()
+              ? ""
+              : ` (last reply: ${fullText.replace(/\s+/g, " ").slice(0, 240)})`)
+        );
+        return {
+          response: new Response(
+            JSON.stringify(
+              buildErrorBody(
+                502,
+                fullText.trim().length === 0
+                  ? "Adapta returned an empty reply"
+                  : "Adapta declined to use the client tools after corrective retries"
+              )
+            ),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          ),
+          url: ADAPTA_STREAM_URL,
+          headers,
+          transformedBody: requestPayload,
+        };
       }
 
       // Every retry came back empty: surface an honest error instead of a 200 with no
