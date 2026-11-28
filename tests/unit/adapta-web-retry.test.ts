@@ -105,7 +105,7 @@ describe("AdaptaWebExecutor — corrective retry", () => {
     }
   });
 
-  it("keeps the previous reply when the retry comes back empty", async () => {
+  it("reports an error when every attempt is a refusal or an empty retry", async () => {
     const originalFetch = globalThis.fetch;
     const bodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = stub(["I don't have access to the terminal here.", ""], bodies);
@@ -118,10 +118,13 @@ describe("AdaptaWebExecutor — corrective retry", () => {
         credentials: { apiKey: "__client=unique-retry-empty-cookie" },
         signal: null,
       });
-      assert.equal(bodies.length, 2);
+      assert.equal(bodies.length, 4);
+      assert.equal(result.response.status, 502);
       const json = await result.response.json();
-      assert.notEqual(json.choices[0].message.content, "");
-      assert.match(json.choices[0].message.content, /don't have access/);
+      assert.match(
+        json.error.message ?? json.message ?? "",
+        /declined to use the client tools|empty reply/
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -249,6 +252,7 @@ describe("structural refusal detection", () => {
   it("detects the environment-unavailable family", () => {
     const family = [
       "O ambiente parou de aceitar execução de comandos no meio da tarefa — o shell ficou indisponível e não consigo mais gravar/rodar nada nesta sessão.",
+      "Não consegui executar nada nesta sessão: a ferramenta de shell foi desabilitada no turno e não tenho `edit`/`read` disponíveis aqui.",
       "Não consigo mais rodar comandos nesta conversa — o shell saiu do ambiente.",
       "as ferramentas de arquivo e terminal não estão disponíveis agora",
       "O terminal ficou indisponível.",
